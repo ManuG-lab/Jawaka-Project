@@ -1,0 +1,243 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Cafeteria user account with role and optional student meal plan details.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "minLength": 3, "maxLength": 160 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "role": { "type": "string", "enum": ["student", "cashier", "kitchen", "admin"] },
+        "studentType": { "type": "string", "enum": ["full_board", "half_board", "commuter"] },
+        "studentNumber": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[a-zA-Z0-9_\\-/]+$" },
+        "phone": { "type": "string", "minLength": 9, "maxLength": 15, "pattern": "^254[0-9]{9}$" },
+        "pinHash": { "type": "string", "minLength": 4, "maxLength": 128 },
+        "isGuest": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "displayName", "role", "createdAt", "updatedAt"]
+    },
+    "MenuItem": {
+      "title": "MenuItem",
+      "description": "Cafeteria dish or beverage item with KSh price and availability.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "category": { "type": "string", "enum": ["Meals", "Comrade's Corner", "Beverages", "Special Corner", "Snacks"] },
+        "price": { "type": "number" },
+        "active": { "type": "boolean" },
+        "soldOut": { "type": "boolean" },
+        "soldOutBy": { "type": "string", "maxLength": 100 },
+        "soldOutAt": { "type": "string", "format": "date-time" },
+        "sortOrder": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "category", "price", "active", "soldOut", "sortOrder", "updatedAt"]
+    },
+    "CafeteriaSettings": {
+      "title": "CafeteriaSettings",
+      "description": "Opening hours, cutoff window, and daily full-board allowance configuration.",
+      "type": "object",
+      "properties": {
+        "openTime": { "type": "string", "pattern": "^[0-2][0-9]:[0-5][0-9]$", "maxLength": 5 },
+        "closeTime": { "type": "string", "pattern": "^[0-2][0-9]:[0-5][0-9]$", "maxLength": 5 },
+        "cutoffMinutesBeforeClose": { "type": "number" },
+        "dailyAllowance": { "type": "number" },
+        "timezone": { "type": "string", "maxLength": 40 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["openTime", "closeTime", "cutoffMinutesBeforeClose", "dailyAllowance", "timezone", "updatedAt"]
+    },
+    "MpesaSettings": {
+      "title": "MpesaSettings",
+      "description": "Non-secret Safaricom Daraja configuration.",
+      "type": "object",
+      "properties": {
+        "env": { "type": "string", "enum": ["mock", "sandbox", "production"] },
+        "tillNumber": { "type": "string", "minLength": 4, "maxLength": 20 },
+        "shortcode": { "type": "string", "minLength": 4, "maxLength": 20 },
+        "transactionType": { "type": "string", "enum": ["CustomerBuyGoodsOnline", "CustomerPayBillOnline"] },
+        "mockOutcome": { "type": "string", "enum": ["success", "fail", "timeout"] },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["env", "tillNumber", "shortcode", "transactionType", "mockOutcome", "updatedAt"]
+    },
+    "DailyCounter": {
+      "title": "DailyCounter",
+      "description": "Daily sequential order number counter keyed by YYYY-MM-DD in Africa/Nairobi.",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", "maxLength": 10 },
+        "lastOrderSeq": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["date", "lastOrderSeq", "updatedAt"]
+    },
+    "AllowanceUsage": {
+      "title": "AllowanceUsage",
+      "description": "Daily full-board student allowance tracking with reserved and confirmed amounts.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "date": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", "maxLength": 10 },
+        "used": { "type": "number" },
+        "reserved": { "type": "number" },
+        "dailyLimit": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "date", "used", "reserved", "dailyLimit", "updatedAt"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Cafeteria order from student app or cashier terminal.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "orderNumber": { "type": "string", "minLength": 1, "maxLength": 16 },
+        "orderSeq": { "type": "number" },
+        "dailyDate": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", "maxLength": 10 },
+        "entryPoint": { "type": "string", "enum": ["student_app", "cashier"] },
+        "customerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "customerName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "studentNumber": { "type": "string", "maxLength": 32 },
+        "phone": { "type": "string", "maxLength": 15 },
+        "cashierUid": { "type": "string", "maxLength": 128 },
+        "items": { "type": "array" },
+        "totalAmount": { "type": "number" },
+        "paymentSplit": { "type": "object" },
+        "mpesaReceiptNumber": { "type": "string", "maxLength": 40 },
+        "mpesaManual": { "type": "boolean" },
+        "mpesaCheckoutRequestId": { "type": "string", "maxLength": 128 },
+        "cashBackDue": { "type": "number" },
+        "cashBackPaid": { "type": "boolean" },
+        "cashBackPaidAt": { "type": "string", "format": "date-time" },
+        "cashBackPaidBy": { "type": "string", "maxLength": 100 },
+        "mpesaRefundFlag": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["pending_payment", "paid", "preparing", "ready", "served", "needs_attention", "cancelled"] },
+        "needsAttentionItems": { "type": "array" },
+        "needsAttentionAt": { "type": "string", "format": "date-time" },
+        "escalatedToCashier": { "type": "boolean" },
+        "paidAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "orderNumber", "orderSeq", "dailyDate", "entryPoint", "customerUid", "customerName", "items", "totalAmount", "paymentSplit", "status", "createdAt", "updatedAt"]
+    },
+    "Payment": {
+      "title": "Payment",
+      "description": "M-Pesa STK Push payment attempt tracked by checkoutRequestId.",
+      "type": "object",
+      "properties": {
+        "checkoutRequestId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "orderId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "orderNumber": { "type": "string", "minLength": 1, "maxLength": 16 },
+        "customerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "amount": { "type": "number" },
+        "phone": { "type": "string", "minLength": 9, "maxLength": 15, "pattern": "^254[0-9]{9}$" },
+        "env": { "type": "string", "enum": ["mock", "sandbox", "production"] },
+        "status": { "type": "string", "enum": ["pending", "completed", "failed", "timeout"] },
+        "mpesaReceiptNumber": { "type": "string", "maxLength": 40 },
+        "resultCode": { "type": "number" },
+        "resultDesc": { "type": "string", "maxLength": 240 },
+        "manual": { "type": "boolean" },
+        "expiresAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["checkoutRequestId", "orderId", "orderNumber", "customerUid", "amount", "phone", "env", "status", "expiresAt", "createdAt", "updatedAt"]
+    },
+    "BoardOrder": {
+      "title": "BoardOrder",
+      "description": "PII-free public order status projection for the /board display.",
+      "type": "object",
+      "properties": {
+        "orderId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "orderNumber": { "type": "string", "minLength": 1, "maxLength": 16 },
+        "dailyDate": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", "maxLength": 10 },
+        "status": { "type": "string", "enum": ["paid", "preparing", "ready", "served", "needs_attention", "cancelled"] },
+        "paidAtMillis": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["orderId", "orderNumber", "dailyDate", "status", "paidAtMillis", "updatedAt"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable operational audit trail for kitchen sold-outs, cash back payouts, and admin actions.",
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "actorUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "actorName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "actorRole": { "type": "string", "enum": ["student", "cashier", "kitchen", "admin"] },
+        "targetType": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "targetId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "details": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["action", "actorUid", "actorName", "actorRole", "targetType", "targetId", "details", "createdAt"]
+    },
+    "StudentLookup": {
+      "title": "StudentLookup",
+      "description": "Cashier student-number lookup record without email PII.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentNumber": { "type": "string", "minLength": 2, "maxLength": 32 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "studentType": { "type": "string", "enum": ["full_board", "half_board", "commuter"] },
+        "pinHash": { "type": "string", "minLength": 4, "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "studentNumber", "displayName", "studentType", "pinHash", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User accounts, roles, and student profiles."
+    },
+    "/studentLookup/{lookupId}": {
+      "schema": { "$ref": "#/entities/StudentLookup" },
+      "description": "Student number index for cashier allowance PIN lookup."
+    },
+    "/menuItems/{itemId}": {
+      "schema": { "$ref": "#/entities/MenuItem" },
+      "description": "Cafeteria menu items across five categories."
+    },
+    "/settings/cafeteria": {
+      "schema": { "$ref": "#/entities/CafeteriaSettings" },
+      "description": "Cafeteria hours, cutoff, and daily allowance setting."
+    },
+    "/settings/mpesa": {
+      "schema": { "$ref": "#/entities/MpesaSettings" },
+      "description": "Non-secret M-Pesa Daraja configuration."
+    },
+    "/dailyCounters/{dateId}": {
+      "schema": { "$ref": "#/entities/DailyCounter" },
+      "description": "Daily order sequence counters keyed by YYYY-MM-DD."
+    },
+    "/allowanceUsage/{usageId}": {
+      "schema": { "$ref": "#/entities/AllowanceUsage" },
+      "description": "Per-student daily allowance usage and reservations."
+    },
+    "/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/Order" },
+      "description": "All cafeteria orders from student app and cashier."
+    },
+    "/payments/{checkoutRequestId}": {
+      "schema": { "$ref": "#/entities/Payment" },
+      "description": "M-Pesa STK push payment tracking records."
+    },
+    "/boardOrders/{orderId}": {
+      "schema": { "$ref": "#/entities/BoardOrder" },
+      "description": "PII-free order display records for public /board screen."
+    },
+    "/auditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Operational audit logs."
+    }
+  }
+}

@@ -1,0 +1,536 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Primitive Helpers ---
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerified() && request.auth.token.email == 'gmannu2055@gmail.com';
+    }
+
+    function userDocExists() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function userRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (isVerified() && userDocExists() && userRole() == 'admin');
+    }
+
+    function isCashier() {
+      return isAdmin() || (isVerified() && userDocExists() && userRole() == 'cashier');
+    }
+
+    function isKitchen() {
+      return isAdmin() || (isVerified() && userDocExists() && userRole() == 'kitchen');
+    }
+
+    function isStaff() {
+      return isAdmin() || isCashier() || isKitchen();
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // --- Validation Blueprints ---
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'role', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'uid', 'email', 'displayName', 'role', 'studentType',
+          'studentNumber', 'phone', 'pinHash', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100
+        && data.role in ['student', 'cashier', 'kitchen', 'admin']
+        && (!('studentType' in data) || data.studentType in ['full_board', 'half_board', 'commuter'])
+        && (!('studentNumber' in data) || (data.studentNumber is string && data.studentNumber.size() >= 2 && data.studentNumber.size() <= 32))
+        && (!('phone' in data) || (data.phone is string && data.phone.size() >= 9 && data.phone.size() <= 15 && data.phone.matches('^254[0-9]{9}$')))
+        && (!('pinHash' in data) || (data.pinHash is string && data.pinHash.size() >= 4 && data.pinHash.size() <= 128))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidMenuItem(data) {
+      return data.keys().hasAll(['id', 'name', 'category', 'price', 'active', 'soldOut', 'sortOrder', 'updatedAt'])
+        && data.keys().hasOnly([
+          'id', 'name', 'category', 'price', 'active', 'soldOut',
+          'soldOutBy', 'soldOutAt', 'sortOrder', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 100
+        && data.category in ['Meals', "Comrade's Corner", 'Beverages', 'Special Corner', 'Snacks']
+        && data.price is number && data.price >= 0 && data.price <= 100000
+        && data.active is bool
+        && data.soldOut is bool
+        && (!('soldOutBy' in data) || (data.soldOutBy is string && data.soldOutBy.size() <= 100))
+        && (!('soldOutAt' in data) || data.soldOutAt is timestamp)
+        && data.sortOrder is number && data.sortOrder >= 0
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCafeteriaSettings(data) {
+      return data.keys().hasAll(['openTime', 'closeTime', 'cutoffMinutesBeforeClose', 'dailyAllowance', 'timezone', 'updatedAt'])
+        && data.keys().hasOnly(['openTime', 'closeTime', 'cutoffMinutesBeforeClose', 'dailyAllowance', 'timezone', 'updatedAt'])
+        && data.openTime is string && data.openTime.size() == 5 && data.openTime.matches('^[0-2][0-9]:[0-5][0-9]$')
+        && data.closeTime is string && data.closeTime.size() == 5 && data.closeTime.matches('^[0-2][0-9]:[0-5][0-9]$')
+        && data.cutoffMinutesBeforeClose is number && data.cutoffMinutesBeforeClose >= 0 && data.cutoffMinutesBeforeClose <= 180
+        && data.dailyAllowance is number && data.dailyAllowance >= 0 && data.dailyAllowance <= 10000
+        && data.timezone is string && data.timezone.size() >= 3 && data.timezone.size() <= 40
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidMpesaSettings(data) {
+      return data.keys().hasAll(['env', 'tillNumber', 'shortcode', 'transactionType', 'mockOutcome', 'updatedAt'])
+        && data.keys().hasOnly(['env', 'tillNumber', 'shortcode', 'transactionType', 'mockOutcome', 'updatedAt'])
+        && data.env in ['mock', 'sandbox', 'production']
+        && data.tillNumber is string && data.tillNumber.size() >= 4 && data.tillNumber.size() <= 20
+        && data.shortcode is string && data.shortcode.size() >= 4 && data.shortcode.size() <= 20
+        && data.transactionType in ['CustomerBuyGoodsOnline', 'CustomerPayBillOnline']
+        && data.mockOutcome in ['success', 'fail', 'timeout']
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDailyCounter(data) {
+      return data.keys().hasAll(['date', 'lastOrderSeq', 'updatedAt'])
+        && data.keys().hasOnly(['date', 'lastOrderSeq', 'updatedAt'])
+        && data.date is string && data.date.size() == 10 && data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && data.lastOrderSeq is number && data.lastOrderSeq >= 0
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAllowanceUsage(data) {
+      return data.keys().hasAll(['uid', 'date', 'used', 'reserved', 'dailyLimit', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'date', 'used', 'reserved', 'dailyLimit', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.date is string && data.date.size() == 10 && data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && data.used is number && data.used >= 0
+        && data.reserved is number && data.reserved >= 0
+        && data.dailyLimit is number && data.dailyLimit >= 0
+        && (data.used + data.reserved) <= data.dailyLimit
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidOrder(data) {
+      return data.keys().hasAll([
+          'id', 'orderNumber', 'orderSeq', 'dailyDate', 'entryPoint',
+          'customerUid', 'customerName', 'items', 'totalAmount', 'paymentSplit',
+          'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'orderNumber', 'orderSeq', 'dailyDate', 'entryPoint',
+          'customerUid', 'customerName', 'studentNumber', 'phone', 'cashierUid',
+          'items', 'totalAmount', 'paymentSplit', 'mpesaReceiptNumber', 'mpesaManual',
+          'mpesaCheckoutRequestId', 'cashBackDue', 'cashBackPaid', 'cashBackPaidAt',
+          'cashBackPaidBy', 'mpesaRefundFlag', 'status', 'needsAttentionItems',
+          'needsAttentionAt', 'escalatedToCashier', 'paidAt', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.orderNumber is string && data.orderNumber.size() >= 1 && data.orderNumber.size() <= 16
+        && data.orderSeq is number && data.orderSeq >= 0
+        && data.dailyDate is string && data.dailyDate.size() == 10 && data.dailyDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && data.entryPoint in ['student_app', 'cashier']
+        && isValidId(data.customerUid)
+        && data.customerName is string && data.customerName.size() >= 1 && data.customerName.size() <= 100
+        && (!('studentNumber' in data) || (data.studentNumber is string && data.studentNumber.size() <= 32))
+        && (!('phone' in data) || (data.phone is string && data.phone.size() <= 15))
+        && (!('cashierUid' in data) || isValidId(data.cashierUid))
+        && data.items is list && data.items.size() >= 1 && data.items.size() <= 30 && data.items[0] is map
+        && data.totalAmount is number && data.totalAmount >= 0 && data.totalAmount <= 500000
+        && data.paymentSplit is map
+        && data.paymentSplit.keys().hasAll(['allowance', 'mpesa', 'cash'])
+        && data.paymentSplit.keys().hasOnly(['allowance', 'mpesa', 'cash'])
+        && data.paymentSplit.allowance is number && data.paymentSplit.allowance >= 0
+        && data.paymentSplit.mpesa is number && data.paymentSplit.mpesa >= 0
+        && data.paymentSplit.cash is number && data.paymentSplit.cash >= 0
+        && (!('mpesaReceiptNumber' in data) || (data.mpesaReceiptNumber is string && data.mpesaReceiptNumber.size() <= 40))
+        && (!('mpesaManual' in data) || data.mpesaManual is bool)
+        && (!('mpesaCheckoutRequestId' in data) || (data.mpesaCheckoutRequestId is string && data.mpesaCheckoutRequestId.size() <= 128))
+        && (!('cashBackDue' in data) || (data.cashBackDue is number && data.cashBackDue >= 0))
+        && (!('cashBackPaid' in data) || data.cashBackPaid is bool)
+        && (!('cashBackPaidAt' in data) || data.cashBackPaidAt is timestamp)
+        && (!('cashBackPaidBy' in data) || (data.cashBackPaidBy is string && data.cashBackPaidBy.size() <= 100))
+        && (!('mpesaRefundFlag' in data) || data.mpesaRefundFlag is bool)
+        && data.status in ['pending_payment', 'paid', 'preparing', 'ready', 'served', 'needs_attention', 'cancelled']
+        && (!('needsAttentionItems' in data) || (data.needsAttentionItems is list && data.needsAttentionItems.size() <= 30))
+        && (!('needsAttentionAt' in data) || data.needsAttentionAt is timestamp)
+        && (!('escalatedToCashier' in data) || data.escalatedToCashier is bool)
+        && (!('paidAt' in data) || data.paidAt is timestamp)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPayment(data) {
+      return data.keys().hasAll([
+          'checkoutRequestId', 'orderId', 'orderNumber', 'customerUid',
+          'amount', 'phone', 'env', 'status', 'expiresAt', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'checkoutRequestId', 'orderId', 'orderNumber', 'customerUid',
+          'amount', 'phone', 'env', 'status', 'mpesaReceiptNumber',
+          'resultCode', 'resultDesc', 'manual', 'expiresAt', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.checkoutRequestId)
+        && isValidId(data.orderId)
+        && data.orderNumber is string && data.orderNumber.size() >= 1 && data.orderNumber.size() <= 16
+        && isValidId(data.customerUid)
+        && data.amount is number && data.amount >= 0
+        && data.phone is string && data.phone.size() >= 9 && data.phone.size() <= 15 && data.phone.matches('^254[0-9]{9}$')
+        && data.env in ['mock', 'sandbox', 'production']
+        && data.status in ['pending', 'completed', 'failed', 'timeout']
+        && (!('mpesaReceiptNumber' in data) || (data.mpesaReceiptNumber is string && data.mpesaReceiptNumber.size() <= 40))
+        && (!('resultCode' in data) || data.resultCode is number)
+        && (!('resultDesc' in data) || (data.resultDesc is string && data.resultDesc.size() <= 240))
+        && (!('manual' in data) || data.manual is bool)
+        && data.expiresAt is timestamp
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBoardOrder(data) {
+      return data.keys().hasAll(['orderId', 'orderNumber', 'dailyDate', 'status', 'paidAtMillis', 'updatedAt'])
+        && data.keys().hasOnly(['orderId', 'orderNumber', 'dailyDate', 'status', 'paidAtMillis', 'updatedAt'])
+        && isValidId(data.orderId)
+        && data.orderNumber is string && data.orderNumber.size() >= 1 && data.orderNumber.size() <= 16
+        && data.dailyDate is string && data.dailyDate.size() == 10 && data.dailyDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && data.status in ['paid', 'preparing', 'ready', 'served', 'needs_attention', 'cancelled']
+        && data.paidAtMillis is number && data.paidAtMillis >= 0
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAuditLog(data) {
+      return data.keys().hasAll(['action', 'actorUid', 'actorName', 'actorRole', 'targetType', 'targetId', 'details', 'createdAt'])
+        && data.keys().hasOnly(['action', 'actorUid', 'actorName', 'actorRole', 'targetType', 'targetId', 'details', 'createdAt'])
+        && data.action is string && data.action.size() >= 1 && data.action.size() <= 64
+        && isValidId(data.actorUid)
+        && data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 100
+        && data.actorRole in ['student', 'cashier', 'kitchen', 'admin']
+        && data.targetType is string && data.targetType.size() >= 1 && data.targetType.size() <= 40
+        && data.targetId is string && data.targetId.size() >= 1 && data.targetId.size() <= 128
+        && data.details is string && data.details.size() >= 1 && data.details.size() <= 500
+        && data.createdAt is timestamp;
+    }
+
+    function isValidStudentLookup(data) {
+      return data.keys().hasAll(['uid', 'studentNumber', 'displayName', 'studentType', 'pinHash', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'studentNumber', 'displayName', 'studentType', 'pinHash', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.studentNumber is string && data.studentNumber.size() >= 2 && data.studentNumber.size() <= 32
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100
+        && data.studentType in ['full_board', 'half_board', 'commuter']
+        && data.pinHash is string && data.pinHash.size() >= 4 && data.pinHash.size() <= 128
+        && data.updatedAt is timestamp;
+    }
+
+    // --- Collection Rules ---
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isCashier() || isAdmin());
+      allow list: if isSignedIn() && (
+        resource.data.uid == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isValidId(userId)
+        && isVerified()
+        && isValidUser(incoming())
+        && incoming().uid == userId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (isOwner(userId) && incoming().role == 'student')
+        );
+      allow update: if isValidId(userId)
+        && isVerified()
+        && isValidUser(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            isOwner(userId)
+            && incoming().role == existing().role
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'displayName', 'studentType', 'studentNumber', 'phone', 'pinHash', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    match /studentLookup/{lookupId} {
+      allow get: if isValidId(lookupId) && isSignedIn() && (isCashier() || isAdmin() || resource == null || resource.data.uid == request.auth.uid);
+      allow list: if false;
+      allow create, update: if isValidId(lookupId)
+        && isVerified()
+        && isValidStudentLookup(incoming())
+        && incoming().updatedAt == request.time
+        && (isAdmin() || incoming().uid == request.auth.uid);
+      allow delete: if isValidId(lookupId) && isAdmin();
+    }
+
+    match /menuItems/{itemId} {
+      allow get, list: if true;
+      allow create: if isValidId(itemId)
+        && isAdmin()
+        && isValidMenuItem(incoming())
+        && incoming().id == itemId
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(itemId)
+        && isVerified()
+        && isValidMenuItem(incoming())
+        && incoming().id == existing().id
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            isKitchen()
+            && incoming().diff(existing()).affectedKeys().hasOnly(['soldOut', 'soldOutBy', 'soldOutAt', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(itemId) && isAdmin();
+    }
+
+    match /settings/{settingId} {
+      allow get: if isValidId(settingId) && settingId in ['cafeteria', 'mpesa'];
+      allow list: if isAdmin();
+      allow create, update: if isValidId(settingId)
+        && isAdmin()
+        && incoming().updatedAt == request.time
+        && (
+          (settingId == 'cafeteria' && isValidCafeteriaSettings(incoming())) ||
+          (settingId == 'mpesa' && isValidMpesaSettings(incoming()))
+        );
+      allow delete: if false;
+    }
+
+    match /dailyCounters/{dateId} {
+      allow get: if isValidId(dateId) && isSignedIn();
+      allow list: if isAdmin();
+      allow create: if isValidId(dateId)
+        && isVerified()
+        && isValidDailyCounter(incoming())
+        && incoming().date == dateId
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(dateId)
+        && isVerified()
+        && isValidDailyCounter(incoming())
+        && incoming().date == existing().date
+        && incoming().lastOrderSeq >= existing().lastOrderSeq
+        && incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /allowanceUsage/{usageId} {
+      allow get: if isValidId(usageId) && isSignedIn() && (
+        usageId.matches('^' + request.auth.uid + '_[0-9]{4}-[0-9]{2}-[0-9]{2}$') ||
+        isCashier() ||
+        isAdmin()
+      );
+      allow list: if isSignedIn() && (
+        resource.data.uid == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isValidId(usageId)
+        && isVerified()
+        && isValidAllowanceUsage(incoming())
+        && incoming().updatedAt == request.time
+        && (
+          isCashier() ||
+          isAdmin() ||
+          incoming().uid == request.auth.uid
+        );
+      allow update: if isValidId(usageId)
+        && isVerified()
+        && isValidAllowanceUsage(incoming())
+        && incoming().uid == existing().uid
+        && incoming().date == existing().date
+        && incoming().updatedAt == request.time
+        && (
+          isCashier() ||
+          isAdmin() ||
+          incoming().uid == request.auth.uid
+        );
+      allow delete: if false;
+    }
+
+    match /orders/{orderId} {
+      allow get: if isValidId(orderId) && isSignedIn() && (
+        existing().customerUid == request.auth.uid ||
+        isStaff()
+      );
+      allow list: if isSignedIn() && (
+        resource.data.customerUid == request.auth.uid ||
+        isStaff()
+      );
+      allow create: if isValidId(orderId)
+        && isVerified()
+        && isValidOrder(incoming())
+        && incoming().id == orderId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          (isCashier() && incoming().entryPoint == 'cashier') ||
+          (incoming().entryPoint == 'student_app' && incoming().customerUid == request.auth.uid)
+        );
+      allow update: if isValidId(orderId)
+        && isVerified()
+        && isValidOrder(incoming())
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().customerUid == existing().customerUid
+        && incoming().entryPoint == existing().entryPoint
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().status in ['pending_payment', 'paid', 'preparing', 'ready', 'needs_attention']
+            && (
+              // Kitchen transitions & sold-out cascade
+              (
+                isKitchen()
+                && incoming().diff(existing()).affectedKeys().hasOnly([
+                  'status', 'needsAttentionItems', 'needsAttentionAt', 'escalatedToCashier', 'updatedAt'
+                ])
+              ) ||
+              // Cashier transitions & payouts
+              (
+                isCashier()
+                && incoming().diff(existing()).affectedKeys().hasOnly([
+                  'orderNumber', 'orderSeq', 'status', 'items', 'totalAmount',
+                  'paymentSplit', 'mpesaReceiptNumber', 'mpesaManual', 'mpesaCheckoutRequestId',
+                  'cashBackDue', 'cashBackPaid', 'cashBackPaidAt', 'cashBackPaidBy',
+                  'needsAttentionItems', 'escalatedToCashier', 'paidAt', 'updatedAt'
+                ])
+              ) ||
+              // Student own-order actions (payment settle, edit/cancel before preparing, pick replacement)
+              (
+                existing().customerUid == request.auth.uid
+                && existing().status in ['pending_payment', 'paid', 'needs_attention']
+                && incoming().diff(existing()).affectedKeys().hasOnly([
+                  'orderNumber', 'orderSeq', 'status', 'items', 'totalAmount',
+                  'paymentSplit', 'mpesaReceiptNumber', 'mpesaCheckoutRequestId',
+                  'cashBackDue', 'mpesaRefundFlag', 'needsAttentionItems',
+                  'paidAt', 'updatedAt'
+                ])
+              )
+            )
+          )
+        );
+      allow delete: if isValidId(orderId) && isAdmin();
+    }
+
+    match /payments/{checkoutRequestId} {
+      allow get: if isValidId(checkoutRequestId) && isSignedIn() && (
+        existing().customerUid == request.auth.uid ||
+        isCashier() ||
+        isAdmin()
+      );
+      allow list: if isSignedIn() && (
+        resource.data.customerUid == request.auth.uid ||
+        isCashier() ||
+        isAdmin()
+      );
+      allow create: if isValidId(checkoutRequestId)
+        && isVerified()
+        && isValidPayment(incoming())
+        && incoming().checkoutRequestId == checkoutRequestId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          isCashier() ||
+          isAdmin() ||
+          incoming().customerUid == request.auth.uid
+        );
+      allow update: if isValidId(checkoutRequestId)
+        && isVerified()
+        && isValidPayment(incoming())
+        && incoming().checkoutRequestId == existing().checkoutRequestId
+        && incoming().orderId == existing().orderId
+        && incoming().customerUid == existing().customerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().status == 'pending'
+            && (
+              isCashier() ||
+              existing().customerUid == request.auth.uid
+            )
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'mpesaReceiptNumber', 'resultCode', 'resultDesc', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if false;
+    }
+
+    match /boardOrders/{orderId} {
+      allow get, list: if true;
+      allow create: if isValidId(orderId)
+        && isVerified()
+        && isValidBoardOrder(incoming())
+        && incoming().orderId == orderId
+        && incoming().updatedAt == request.time
+        && (
+          isStaff() ||
+          existsAfter(/databases/$(database)/documents/orders/$(orderId))
+        );
+      allow update: if isValidId(orderId)
+        && isVerified()
+        && isValidBoardOrder(incoming())
+        && incoming().orderId == existing().orderId
+        && incoming().updatedAt == request.time
+        && (
+          isStaff() ||
+          get(/databases/$(database)/documents/orders/$(orderId)).data.customerUid == request.auth.uid
+        );
+      allow delete: if isValidId(orderId) && isAdmin();
+    }
+
+    match /auditLogs/{logId} {
+      allow get: if isValidId(logId) && isAdmin();
+      allow list: if isSignedIn() && (
+        isAdmin() ||
+        resource.data.actorUid == request.auth.uid
+      );
+      allow create: if isValidId(logId)
+        && isVerified()
+        && isValidAuditLog(incoming())
+        && incoming().actorUid == request.auth.uid
+        && incoming().createdAt == request.time;
+      allow update, delete: if false;
+    }
+  }
+}
