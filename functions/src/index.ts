@@ -1,11 +1,13 @@
 import * as crypto from 'node:crypto';
-import * as admin from 'firebase-admin';
-import { getFirestore } from 'firebase-admin/firestore';
+import { initializeApp, getApps, getApp } from 'firebase-admin/app';
+import { getFirestore, Firestore, Timestamp } from 'firebase-admin/firestore';
 import { onCall, onRequest, HttpsError } from 'firebase-functions/v2/https';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { defineSecret } from 'firebase-functions/params';
 
-admin.initializeApp();
+if (!getApps().length) {
+  initializeApp();
+}
 
 const MPESA_CONSUMER_KEY = defineSecret('MPESA_CONSUMER_KEY');
 const MPESA_CONSUMER_SECRET = defineSecret('MPESA_CONSUMER_SECRET');
@@ -17,8 +19,8 @@ const DEFAULT_TILL_NUMBER = '1804698';
 const FIRESTORE_DATABASE_ID =
   process.env.FIRESTORE_DATABASE_ID || 'ai-studio-704d1da9-c7ca-41fc-9076-f027c78516a2';
 
-function getDb(): admin.firestore.Firestore {
-  return getFirestore(admin.app(), FIRESTORE_DATABASE_ID);
+function getDb(): Firestore {
+  return getFirestore(getApp(), FIRESTORE_DATABASE_ID);
 }
 
 function getProjectId(): string {
@@ -130,7 +132,7 @@ async function fetchDarajaToken(env: string): Promise<string> {
 }
 
 async function settlePaymentTransaction(params: {
-  db: admin.firestore.Firestore;
+  db: Firestore;
   checkoutRequestId: string;
   resultCode: number;
   resultDesc: string;
@@ -157,7 +159,7 @@ async function settlePaymentTransaction(params: {
       return { status: 'order_missing' };
     }
     const order = orderSnap.data()!;
-    const now = admin.firestore.Timestamp.now();
+    const now = Timestamp.now();
 
     if (resultCode === 0) {
       if (typeof paidAmount === 'number' && !Number.isNaN(paidAmount) && Math.round(paidAmount) !== Math.round(payment.amount)) {
@@ -326,8 +328,8 @@ export const initiateStkPush = onCall(
         };
 
     const env = String(mpesaCfg.env || 'production');
-    const now = admin.firestore.Timestamp.now();
-    const expiresAt = admin.firestore.Timestamp.fromMillis(now.toMillis() + 2 * 60 * 1000);
+    const now = Timestamp.now();
+    const expiresAt = Timestamp.fromMillis(now.toMillis() + 2 * 60 * 1000);
 
     if (env === 'mock') {
       const checkoutRequestId = `MOCK_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -604,7 +606,7 @@ export const expireStalePayments = onSchedule(
   },
   async () => {
     const db = getDb();
-    const now = admin.firestore.Timestamp.now();
+    const now = Timestamp.now();
     const staleSnap = await db
       .collection('payments')
       .where('status', '==', 'pending')
@@ -688,7 +690,7 @@ export const expireStalePayments = onSchedule(
     }
 
     // Also escalate needs_attention orders older than 5 minutes to cashier
-    const fiveMinAgo = admin.firestore.Timestamp.fromMillis(now.toMillis() - 5 * 60 * 1000);
+    const fiveMinAgo = Timestamp.fromMillis(now.toMillis() - 5 * 60 * 1000);
     const attentionSnap = await db
       .collection('orders')
       .where('status', '==', 'needs_attention')

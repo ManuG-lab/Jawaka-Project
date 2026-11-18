@@ -1,13 +1,48 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.expireStalePayments = exports.queryStkStatus = exports.mpesaCallback = exports.initiateStkPush = void 0;
-const crypto = require("node:crypto");
-const admin = require("firebase-admin");
+const crypto = __importStar(require("node:crypto"));
+const app_1 = require("firebase-admin/app");
 const firestore_1 = require("firebase-admin/firestore");
 const https_1 = require("firebase-functions/v2/https");
 const scheduler_1 = require("firebase-functions/v2/scheduler");
 const params_1 = require("firebase-functions/params");
-admin.initializeApp();
+if (!(0, app_1.getApps)().length) {
+    (0, app_1.initializeApp)();
+}
 const MPESA_CONSUMER_KEY = (0, params_1.defineSecret)('MPESA_CONSUMER_KEY');
 const MPESA_CONSUMER_SECRET = (0, params_1.defineSecret)('MPESA_CONSUMER_SECRET');
 const MPESA_PASSKEY = (0, params_1.defineSecret)('MPESA_PASSKEY');
@@ -15,7 +50,7 @@ const DEFAULT_SHORTCODE = '1334820';
 const DEFAULT_TILL_NUMBER = '1804698';
 const FIRESTORE_DATABASE_ID = process.env.FIRESTORE_DATABASE_ID || 'ai-studio-704d1da9-c7ca-41fc-9076-f027c78516a2';
 function getDb() {
-    return (0, firestore_1.getFirestore)(admin.app(), FIRESTORE_DATABASE_ID);
+    return (0, firestore_1.getFirestore)((0, app_1.getApp)(), FIRESTORE_DATABASE_ID);
 }
 function getProjectId() {
     if (process.env.GCLOUD_PROJECT)
@@ -145,7 +180,7 @@ async function settlePaymentTransaction(params) {
             return { status: 'order_missing' };
         }
         const order = orderSnap.data();
-        const now = admin.firestore.Timestamp.now();
+        const now = firestore_1.Timestamp.now();
         if (resultCode === 0) {
             if (typeof paidAmount === 'number' && !Number.isNaN(paidAmount) && Math.round(paidAmount) !== Math.round(payment.amount)) {
                 tx.update(paymentRef, {
@@ -279,8 +314,8 @@ exports.initiateStkPush = (0, https_1.onCall)({
             mockOutcome: 'success',
         };
     const env = String(mpesaCfg.env || 'production');
-    const now = admin.firestore.Timestamp.now();
-    const expiresAt = admin.firestore.Timestamp.fromMillis(now.toMillis() + 2 * 60 * 1000);
+    const now = firestore_1.Timestamp.now();
+    const expiresAt = firestore_1.Timestamp.fromMillis(now.toMillis() + 2 * 60 * 1000);
     if (env === 'mock') {
         const checkoutRequestId = `MOCK_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         await db.collection('payments').doc(checkoutRequestId).set({
@@ -502,7 +537,7 @@ exports.expireStalePayments = (0, scheduler_1.onSchedule)({
     secrets: [MPESA_CONSUMER_KEY, MPESA_CONSUMER_SECRET, MPESA_PASSKEY],
 }, async () => {
     const db = getDb();
-    const now = admin.firestore.Timestamp.now();
+    const now = firestore_1.Timestamp.now();
     const staleSnap = await db
         .collection('payments')
         .where('status', '==', 'pending')
@@ -576,7 +611,7 @@ exports.expireStalePayments = (0, scheduler_1.onSchedule)({
         }
     }
     // Also escalate needs_attention orders older than 5 minutes to cashier
-    const fiveMinAgo = admin.firestore.Timestamp.fromMillis(now.toMillis() - 5 * 60 * 1000);
+    const fiveMinAgo = firestore_1.Timestamp.fromMillis(now.toMillis() - 5 * 60 * 1000);
     const attentionSnap = await db
         .collection('orders')
         .where('status', '==', 'needs_attention')
