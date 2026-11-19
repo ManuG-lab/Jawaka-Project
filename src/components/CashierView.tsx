@@ -23,7 +23,6 @@ import {
   createCashierOrder,
   lookupStudentByNumber,
   markCashBackPaid,
-  queryStkStatusFallback,
   resolveReplacement,
   retryFailedOrderPayment,
 } from '../services/jawakaService';
@@ -91,39 +90,14 @@ export function CashierView({
   const [actionBusyId, setActionBusyId] = useState<string | null>(null);
 
   // Modals
-  const cashierStkKey = `jawaka_cashier_stk_${cashier.uid}`;
   const [receiptOrder, setReceiptOrder] = useState<Order | null>(null);
   const [pendingReceiptOrderId, setPendingReceiptOrderId] = useState<string | null>(null);
   const [stkSession, setStkSession] = useState<{
     checkoutRequestId: string;
     orderId: string;
-  } | null>(() => {
-    try {
-      const saved = sessionStorage.getItem(`jawaka_cashier_stk_${cashier.uid}`);
-      if (!saved) return null;
-      const parsed = JSON.parse(saved) as { checkoutRequestId?: string; orderId?: string };
-      if (parsed.checkoutRequestId && parsed.orderId) {
-        return { checkoutRequestId: parsed.checkoutRequestId, orderId: parsed.orderId };
-      }
-    } catch {
-      // ignore storage errors
-    }
-    return null;
-  });
+  } | null>(null);
   const [escalatedReplaceOrder, setEscalatedReplaceOrder] = useState<Order | null>(null);
   const [replaceExtraChannel, setReplaceExtraChannel] = useState<'cash' | 'mpesa_stk'>('cash');
-
-  useEffect(() => {
-    try {
-      if (stkSession) {
-        sessionStorage.setItem(cashierStkKey, JSON.stringify(stkSession));
-      } else {
-        sessionStorage.removeItem(cashierStkKey);
-      }
-    } catch {
-      // ignore storage errors
-    }
-  }, [stkSession, cashierStkKey]);
 
   const hoursCheck = isCafeteriaOpenForOrders(cafeteriaSettings);
 
@@ -136,30 +110,6 @@ export function CashierView({
       }
     }
   }, [orders, pendingReceiptOrderId]);
-
-  useEffect(() => {
-    if (mpesaSettings.env === 'mock') return;
-    const pendingOrders = orders.filter(
-      (o) => o.status === 'pending_payment' && Boolean(o.mpesaCheckoutRequestId)
-    );
-    if (pendingOrders.length === 0) return;
-
-    const verifyPending = () => {
-      if (document.visibilityState === 'hidden') return;
-      for (const po of pendingOrders) {
-        if (po.mpesaCheckoutRequestId) {
-          void queryStkStatusFallback(po.mpesaCheckoutRequestId).catch(() => undefined);
-        }
-      }
-    };
-
-    window.addEventListener('focus', verifyPending);
-    document.addEventListener('visibilitychange', verifyPending);
-    return () => {
-      window.removeEventListener('focus', verifyPending);
-      document.removeEventListener('visibilitychange', verifyPending);
-    };
-  }, [orders, mpesaSettings.env]);
 
   const filteredMenu = useMemo(() => {
     return menuItems
@@ -1198,12 +1148,15 @@ export function CashierView({
 
       {stkSession && (
         <StkPushModal
+          key={stkSession.checkoutRequestId}
           checkoutRequestId={stkSession.checkoutRequestId}
           orderId={stkSession.orderId}
           mpesaSettings={mpesaSettings}
           onRetry={async (phone) => {
             const target = orders.find((o) => o.id === stkSession.orderId);
-            if (!target) return;
+            if (!target) {
+              throw new Error('Order could not be loaded for retry. Please check Active Queue.');
+            }
             const newId = await retryFailedOrderPayment({
               order: target,
               phone,

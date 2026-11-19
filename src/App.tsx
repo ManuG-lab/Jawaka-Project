@@ -20,7 +20,7 @@ import {
   query,
   where,
 } from 'firebase/firestore';
-import { ArrowLeft, RefreshCw, ShieldCheck, Utensils } from 'lucide-react';
+import { ArrowLeft, ShieldCheck, Utensils } from 'lucide-react';
 import { AdminView } from './components/AdminView';
 import { CashierView } from './components/CashierView';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -33,7 +33,6 @@ import { SignInPage } from './components/SignInPage';
 import { StudentView } from './components/StudentView';
 import { auth, db, googleProvider, handleFirestoreError, OperationType } from './lib/firebase';
 import { getNairobiDateString } from './lib/nairobiTime';
-import { forceRefreshApp, subscribePwaUpdate } from './lib/pwaRefresh';
 import {
   BOOTSTRAPPED_ADMIN_EMAIL,
   DEFAULT_CAFETERIA_SETTINGS,
@@ -112,10 +111,6 @@ function JawakaShell() {
   const [onbError, setOnbError] = useState('');
   const [onbSaving, setOnbSaving] = useState(false);
   const [authError, setAuthError] = useState('');
-  const [updateReady, setUpdateReady] = useState(false);
-  const [appRefreshing, setAppRefreshing] = useState(false);
-
-  useEffect(() => subscribePwaUpdate(setUpdateReady), []);
 
   // Browser back/forward sync for /, /board, /kitchen, /cashier, /admin
   useEffect(() => {
@@ -574,30 +569,6 @@ function JawakaShell() {
 
           <div className="flex items-center gap-2 shrink-0">
             <PWAInstallButton />
-            <button
-              type="button"
-              onClick={() => {
-                setAppRefreshing(true);
-                void forceRefreshApp();
-              }}
-              disabled={appRefreshing}
-              aria-label="Refresh app and check for updates"
-              title={updateReady ? 'Update ready — tap to refresh' : 'Refresh app & sync'}
-              className={`relative min-h-[40px] min-w-[40px] sm:px-3 py-1.5 border text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap shrink-0 ${
-                updateReady
-                  ? 'border-[#2E6F40] bg-[#EDF5EE] text-[#2E6F40] hover:bg-[#DCECE0]'
-                  : 'border-[#D9CEBC] bg-white text-[#1C1714] hover:border-[#1C1714]'
-              }`}
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${appRefreshing ? 'animate-spin' : ''}`} />
-              <span className="hidden sm:inline">{updateReady ? 'Update' : 'Refresh'}</span>
-              {updateReady && (
-                <span
-                  aria-hidden="true"
-                  className="sm:hidden absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-[#2E6F40] border border-[#FAF6EE]"
-                />
-              )}
-            </button>
             {firebaseUser ? (
               <button
                 onClick={() => void signOut(auth)}

@@ -60,7 +60,6 @@ export function StudentView({
   cafeteriaSettings,
   mpesaSettings,
 }: StudentViewProps) {
-  const stkStorageKey = `jawaka_active_stk_${user.uid}`;
   const [tab, setTab] = useState<'menu' | 'orders'>('menu');
   const [selectedCategory, setSelectedCategory] = useState<'All' | MenuCategory>('All');
   const [searchQuery, setSearchQuery] = useState('');
@@ -75,19 +74,7 @@ export function StudentView({
   const [stkSession, setStkSession] = useState<{
     checkoutRequestId: string;
     orderId: string;
-  } | null>(() => {
-    try {
-      const saved = sessionStorage.getItem(`jawaka_active_stk_${user.uid}`);
-      if (!saved) return null;
-      const parsed = JSON.parse(saved) as { checkoutRequestId?: string; orderId?: string };
-      if (parsed.checkoutRequestId && parsed.orderId) {
-        return { checkoutRequestId: parsed.checkoutRequestId, orderId: parsed.orderId };
-      }
-    } catch {
-      // ignore storage errors
-    }
-    return null;
-  });
+  } | null>(null);
   const [replacementModal, setReplacementModal] = useState<{
     order: Order;
     removedItemId: string;
@@ -101,46 +88,9 @@ export function StudentView({
   const [nowTick, setNowTick] = useState(Date.now());
 
   useEffect(() => {
-    try {
-      if (stkSession) {
-        sessionStorage.setItem(stkStorageKey, JSON.stringify(stkSession));
-      } else {
-        sessionStorage.removeItem(stkStorageKey);
-      }
-    } catch {
-      // ignore storage errors
-    }
-  }, [stkSession, stkStorageKey]);
-
-  useEffect(() => {
     const t = setInterval(() => setNowTick(Date.now()), 5000);
     return () => clearInterval(t);
   }, []);
-
-  // Reconcile pending M-Pesa orders automatically when mobile tab returns to foreground
-  useEffect(() => {
-    if (mpesaSettings.env === 'mock') return;
-    const pendingOrders = orders.filter(
-      (o) => o.status === 'pending_payment' && Boolean(o.mpesaCheckoutRequestId)
-    );
-    if (pendingOrders.length === 0) return;
-
-    const verifyPending = () => {
-      if (document.visibilityState === 'hidden') return;
-      for (const po of pendingOrders) {
-        if (po.mpesaCheckoutRequestId) {
-          void queryStkStatusFallback(po.mpesaCheckoutRequestId).catch(() => undefined);
-        }
-      }
-    };
-
-    window.addEventListener('focus', verifyPending);
-    document.addEventListener('visibilitychange', verifyPending);
-    return () => {
-      window.removeEventListener('focus', verifyPending);
-      document.removeEventListener('visibilitychange', verifyPending);
-    };
-  }, [orders, mpesaSettings.env]);
 
   // Auto-escalate any needs_attention order older than 5 minutes
   useEffect(() => {
@@ -711,7 +661,9 @@ export function StudentView({
                   order.status === 'needs_attention' ? 'paid' : (order.status as typeof steps[number])
                 );
                 const canEditOrCancel = order.status === 'paid' || order.status === 'needs_attention';
-                const canRetry = order.status === 'pending_payment' || order.status === 'cancelled';
+                const canRetry =
+                  order.status === 'pending_payment' ||
+                  (order.status === 'cancelled' && order.orderSeq === 0);
 
                 return (
                   <div key={order.id} className="bg-white border border-[#D9CEBC] p-4 sm:p-5 flex flex-col justify-between min-w-0">
@@ -1101,12 +1053,15 @@ export function StudentView({
 
       {stkSession && (
         <StkPushModal
+          key={stkSession.checkoutRequestId}
           checkoutRequestId={stkSession.checkoutRequestId}
           orderId={stkSession.orderId}
           mpesaSettings={mpesaSettings}
           onRetry={async (phone) => {
             const targetOrder = orders.find((o) => o.id === stkSession.orderId);
-            if (!targetOrder) return;
+            if (!targetOrder) {
+              throw new Error('Order could not be loaded for retry. Please try from My Orders.');
+            }
             const newId = await retryFailedOrderPayment({
               order: targetOrder,
               phone,

@@ -952,23 +952,6 @@ export async function retryFailedOrderPayment(params: {
   const { order, phone, cafeteriaSettings, mpesaSettings } = params;
   const normalizedPhone = normalizeKenyanPhone(phone);
 
-  // Safety check: if the previous STK prompt already completed while mobile browser was backgrounded,
-  // settle & return that checkoutRequestId instead of sending a duplicate STK charge.
-  if (
-    order.status === 'pending_payment' &&
-    order.mpesaCheckoutRequestId &&
-    mpesaSettings.env !== 'mock'
-  ) {
-    try {
-      const check = await queryStkStatusFallback(order.mpesaCheckoutRequestId);
-      if (check.status === 'completed') {
-        return order.mpesaCheckoutRequestId;
-      }
-    } catch {
-      // Proceed to retry if status check could not confirm completion
-    }
-  }
-
   const today = getNairobiDateString();
   const usageRef = doc(db, 'allowanceUsage', `${order.customerUid}_${today}`);
 
@@ -1015,7 +998,12 @@ export async function retryFailedOrderPayment(params: {
       });
     });
   } catch (err) {
-    if (err instanceof Error && (err.message === 'Order not found.' || err.message.startsWith('{'))) {
+    if (
+      err instanceof Error &&
+      (err.message === 'Order not found.' ||
+        err.message.startsWith('Cancelled orders') ||
+        err.message.startsWith('{'))
+    ) {
       throw err;
     }
     handleFirestoreError(err, OperationType.WRITE, `orders/${order.id}`);

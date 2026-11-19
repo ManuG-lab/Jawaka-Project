@@ -11,12 +11,6 @@
     --jawaka-border: #D9CEBC;
   }
 
-  html, body {
-    overflow-x: clip;
-    max-width: 100%;
-    height: auto;
-  }
-
   body {
     font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
     background-color: var(--jawaka-paper);

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { doc, getDocFromServer, onSnapshot } from 'firebase/firestore';
+import { useEffect, useState } from 'react';
+import { doc, onSnapshot } from 'firebase/firestore';
 import { CheckCircle2, Loader2, RefreshCw, Smartphone, X, XCircle } from 'lucide-react';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { formatKSh } from '../lib/nairobiTime';
@@ -31,77 +31,34 @@ export function StkPushModal({
   const [checkingStatus, setCheckingStatus] = useState(false);
   const [statusHint, setStatusHint] = useState('');
   const [secondsLeft, setSecondsLeft] = useState(120);
-  const syncInFlightRef = useRef(false);
-
-  useEffect(() => {
-    setSecondsLeft(120);
-    setStatusHint('');
-    setRetryError('');
-  }, [checkoutRequestId]);
 
   const paymentStatus = payment?.status || 'pending';
 
-  const fetchServerDocs = useCallback(async () => {
-    const [paySnap, ordSnap] = await Promise.all([
-      getDocFromServer(doc(db, 'payments', checkoutRequestId)).catch(() => null),
-      getDocFromServer(doc(db, 'orders', orderId)).catch(() => null),
-    ]);
-    let latestStatus: PaymentDoc['status'] | undefined;
-    if (paySnap?.exists()) {
-      const data = paySnap.data() as PaymentDoc;
-      latestStatus = data.status;
-      setPayment(data);
-      if (data.phone) {
-        setRetryPhone((prev) => prev || data.phone);
+  const handleCheckStatus = async (manual = false) => {
+    if (mpesaSettings.env === 'mock') return;
+    if (manual) {
+      setCheckingStatus(true);
+      setStatusHint('');
+    }
+    try {
+      const res = await queryStkStatusFallback(checkoutRequestId);
+      if (manual && res.status === 'pending' && res.message) {
+        setStatusHint(res.message);
       }
-    }
-    if (ordSnap?.exists()) {
-      setOrder(ordSnap.data() as Order);
-    }
-    return latestStatus;
-  }, [checkoutRequestId, orderId]);
-
-  const syncStatusWithServerAndDaraja = useCallback(
-    async (manual = false) => {
-      if (syncInFlightRef.current) return;
-      syncInFlightRef.current = true;
+    } catch (err) {
       if (manual) {
-        setCheckingStatus(true);
-        setStatusHint('');
+        setStatusHint(
+          err instanceof Error ? err.message : 'Unable to check M-Pesa status right now.'
+        );
       }
-      try {
-        // 1. Always pull fresh payment/order docs from server first (bypasses stalled mobile cache/WebChannel)
-        const serverStatus = await fetchServerDocs();
-        if (serverStatus && serverStatus !== 'pending') {
-          return;
-        }
-
-        // 2. If still pending in live/sandbox mode, ask Cloud Function to query Safaricom Daraja directly
-        if (mpesaSettings.env !== 'mock') {
-          const res = await queryStkStatusFallback(checkoutRequestId);
-          if (res.status !== 'pending') {
-            await fetchServerDocs();
-          } else if (manual && res.message) {
-            setStatusHint(res.message);
-          }
-        }
-      } catch (err) {
-        if (manual) {
-          setStatusHint(
-            err instanceof Error ? err.message : 'Unable to check M-Pesa status right now.'
-          );
-        }
-      } finally {
-        syncInFlightRef.current = false;
-        if (manual) {
-          setCheckingStatus(false);
-        }
+    } finally {
+      if (manual) {
+        setCheckingStatus(false);
       }
-    },
-    [checkoutRequestId, fetchServerDocs, mpesaSettings.env]
-  );
+    }
+  };
 
-  // Real-time Firestore listeners (never tied to retryPhone so they stay stable)
+  // Real-time Firestore listeners
   useEffect(() => {
     const unsubPay = onSnapshot(
       doc(db, 'payments', checkoutRequestId),
@@ -133,13 +90,11 @@ export function StkPushModal({
     };
   }, [checkoutRequestId, orderId]);
 
-  // Countdown for 2-minute STK window (wall-clock resilient when mobile OS suspends tab)
+  // Countdown for 2-minute STK window
   useEffect(() => {
     if (paymentStatus !== 'pending') return;
-    const startedAt = Date.now();
     const timer = setInterval(() => {
-      const elapsed = Math.floor((Date.now() - startedAt) / 1000);
-      setSecondsLeft(Math.max(0, 120 - elapsed));
+      setSecondsLeft((prev) => Math.max(0, prev - 1));
     }, 1000);
     return () => clearInterval(timer);
   }, [checkoutRequestId, paymentStatus]);
@@ -160,47 +115,17 @@ export function StkPushModal({
     return () => clearTimeout(t);
   }, [checkoutRequestId, mpesaSettings.env, mpesaSettings.mockOutcome, paymentStatus, payment]);
 
-  // Mobile wake-up sync: when user returns from the SIM Toolkit PIN popup or M-Pesa SMS,
-  // immediately pull fresh state from Firestore server and Daraja STK Query.
-  useEffect(() => {
-    if (paymentStatus !== 'pending') return;
-
-    const onWake = () => {
-      if (document.visibilityState === 'hidden') return;
-      void syncStatusWithServerAndDaraja(false);
-    };
-
-    window.addEventListener('focus', onWake);
-    window.addEventListener('pageshow', onWake);
-    window.addEventListener('online', onWake);
-    document.addEventListener('visibilitychange', onWake);
-
-    return () => {
-      window.removeEventListener('focus', onWake);
-      window.removeEventListener('pageshow', onWake);
-      window.removeEventListener('online', onWake);
-      document.removeEventListener('visibilitychange', onWake);
-    };
-  }, [paymentStatus, syncStatusWithServerAndDaraja]);
-
-  // Automatic fallback STK query polling in live/sandbox mode (stable deps; won't reset on snapshot updates)
+  // Fallback STK query polling in live/sandbox mode if callback is delayed
   useEffect(() => {
     if (mpesaSettings.env === 'mock') return;
     if (paymentStatus !== 'pending') return;
 
-    const initialTimer = setTimeout(() => {
-      void syncStatusWithServerAndDaraja(false);
-    }, 8_000);
-
     const intervalTimer = setInterval(() => {
-      void syncStatusWithServerAndDaraja(false);
-    }, 12_000);
+      void queryStkStatusFallback(checkoutRequestId).catch(() => undefined);
+    }, 20_000);
 
-    return () => {
-      clearTimeout(initialTimer);
-      clearInterval(intervalTimer);
-    };
-  }, [checkoutRequestId, mpesaSettings.env, paymentStatus, syncStatusWithServerAndDaraja]);
+    return () => clearInterval(intervalTimer);
+  }, [checkoutRequestId, mpesaSettings.env, paymentStatus]);
 
   const handleRetryClick = async () => {
     setRetryError('');
@@ -256,9 +181,10 @@ export function StkPushModal({
                   Check your phone and enter your M-Pesa PIN
                 </p>
                 <p className="text-sm text-[#61554C] mt-1">
-                  Prompt sent to <span className="font-ticket">{payment?.phone || '...'}</span> for{' '}
+                  Prompt sent to{' '}
+                  <span className="font-ticket">{payment?.phone || retryPhone || '...'}</span> for{' '}
                   <strong className="font-ticket text-[#1C1714]">
-                    {formatKSh(payment?.amount || 0)}
+                    {formatKSh(payment?.amount || order?.paymentSplit?.mpesa || 0)}
                   </strong>
                 </p>
               </div>
@@ -270,7 +196,7 @@ export function StkPushModal({
               {mpesaSettings.env !== 'mock' && (
                 <div className="border-t border-[#E6DDD0] pt-3 space-y-2">
                   <button
-                    onClick={() => void syncStatusWithServerAndDaraja(true)}
+                    onClick={() => void handleCheckStatus(true)}
                     disabled={checkingStatus}
                     className="w-full min-h-[40px] px-3 py-2 border border-[#1C1714] text-xs font-semibold text-[#1C1714] hover:bg-[#FAF6EE] flex items-center justify-center gap-2 disabled:opacity-50"
                   >
