@@ -49,7 +49,7 @@ export function PublicBoardView({ onExitBoard }: PublicBoardViewProps) {
   const preparingOrders = boardOrders.filter((o) => o.status === 'preparing' || o.status === 'paid');
 
   return (
-    <div className="min-h-screen bg-[#14110F] text-[#FAF6EE] flex flex-col overflow-x-hidden">
+    <div className="min-h-screen bg-[#14110F] text-[#FAF6EE] flex flex-col overflow-x-clip">
       <div className="filmstrip-border" />
       <header className="px-4 sm:px-6 lg:px-12 py-4 sm:py-5 border-b border-[#2D2621] flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3 min-w-0">

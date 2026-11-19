@@ -40,6 +40,7 @@ export function KitchenView({
   const [itemSearch, setItemSearch] = useState('');
   const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
   const [busyItemId, setBusyItemId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState('');
   const [nowTick, setNowTick] = useState(Date.now());
 
   useEffect(() => {
@@ -93,7 +94,15 @@ export function KitchenView({
   const soldOutCount = menuItems.filter((m) => m.active && m.soldOut).length;
 
   return (
-    <div className="max-w-[1600px] mx-auto px-3 sm:px-4 lg:px-6 py-4 space-y-4 overflow-x-hidden">
+    <div className="max-w-[1600px] mx-auto px-3 sm:px-4 lg:px-6 py-4 space-y-4 overflow-x-clip">
+      {actionError && (
+        <div className="bg-[#FCECE9] border border-[#B93829] px-4 py-2.5 text-xs text-[#B93829] flex items-center justify-between gap-2">
+          <span>{actionError}</span>
+          <button onClick={() => setActionError('')} className="font-semibold underline shrink-0">
+            Dismiss
+          </button>
+        </div>
+      )}
       {/* Independent Kitchen Status Strip */}
       <div className="bg-white border border-[#D9CEBC] p-3.5 sm:p-4 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
         <div className="min-w-0">
@@ -358,9 +367,14 @@ export function KitchenView({
                           <button
                             disabled={busyOrderId === order.id}
                             onClick={async () => {
+                              setActionError('');
                               setBusyOrderId(order.id);
                               try {
                                 await advanceOrderStatus(order, 'preparing');
+                              } catch (err) {
+                                setActionError(
+                                  err instanceof Error ? err.message : 'Could not update order.'
+                                );
                               } finally {
                                 setBusyOrderId(null);
                               }
@@ -376,9 +390,14 @@ export function KitchenView({
                           <button
                             disabled={busyOrderId === order.id}
                             onClick={async () => {
+                              setActionError('');
                               setBusyOrderId(order.id);
                               try {
                                 await advanceOrderStatus(order, 'ready');
+                              } catch (err) {
+                                setActionError(
+                                  err instanceof Error ? err.message : 'Could not update order.'
+                                );
                               } finally {
                                 setBusyOrderId(null);
                               }
@@ -394,9 +413,14 @@ export function KitchenView({
                           <button
                             disabled={busyOrderId === order.id}
                             onClick={async () => {
+                              setActionError('');
                               setBusyOrderId(order.id);
                               try {
                                 await advanceOrderStatus(order, 'served');
+                              } catch (err) {
+                                setActionError(
+                                  err instanceof Error ? err.message : 'Could not update order.'
+                                );
                               } finally {
                                 setBusyOrderId(null);
                               }
@@ -484,6 +508,7 @@ export function KitchenView({
                 <button
                   disabled={busyItemId === item.id}
                   onClick={async () => {
+                    setActionError('');
                     setBusyItemId(item.id);
                     try {
                       await toggleMenuSoldOut({
@@ -491,6 +516,10 @@ export function KitchenView({
                         soldOut: !item.soldOut,
                         actor: kitchenUser,
                       });
+                    } catch (err) {
+                      setActionError(
+                        err instanceof Error ? err.message : 'Could not toggle stock status.'
+                      );
                     } finally {
                       setBusyItemId(null);
                     }

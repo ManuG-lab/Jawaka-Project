@@ -436,28 +436,39 @@ service cloud.firestore {
                   'status', 'needsAttentionItems', 'needsAttentionAt', 'escalatedToCashier', 'updatedAt'
                 ])
               ) ||
-              // Cashier transitions & payouts
+              // Cashier transitions, STK phone updates & payouts
               (
                 isCashier()
                 && incoming().diff(existing()).affectedKeys().hasOnly([
                   'orderNumber', 'orderSeq', 'status', 'items', 'totalAmount',
-                  'paymentSplit', 'mpesaReceiptNumber', 'mpesaManual', 'mpesaCheckoutRequestId',
+                  'paymentSplit', 'phone', 'mpesaReceiptNumber', 'mpesaManual', 'mpesaCheckoutRequestId',
                   'cashBackDue', 'cashBackPaid', 'cashBackPaidAt', 'cashBackPaidBy',
                   'mpesaRefundFlag', 'needsAttentionItems', 'escalatedToCashier', 'paidAt', 'updatedAt'
                 ])
               ) ||
-              // Student own-order actions (payment settle, edit/cancel before preparing, pick replacement)
+              // Student own-order actions (payment settle, edit/cancel before preparing, escalate, pick replacement)
               (
                 existing().customerUid == request.auth.uid
                 && existing().status in ['pending_payment', 'paid', 'needs_attention']
+                && incoming().status in ['pending_payment', 'paid', 'needs_attention', 'cancelled']
                 && incoming().diff(existing()).affectedKeys().hasOnly([
                   'orderNumber', 'orderSeq', 'status', 'items', 'totalAmount',
-                  'paymentSplit', 'mpesaReceiptNumber', 'mpesaCheckoutRequestId',
-                  'cashBackDue', 'mpesaRefundFlag', 'needsAttentionItems',
+                  'paymentSplit', 'phone', 'mpesaReceiptNumber', 'mpesaCheckoutRequestId',
+                  'cashBackDue', 'mpesaRefundFlag', 'needsAttentionItems', 'escalatedToCashier',
                   'paidAt', 'updatedAt'
                 ])
               )
             )
+          ) ||
+          // Retry failed/timed-out unpaid STK Push order (cancelled while orderSeq == 0 -> pending_payment)
+          (
+            existing().status == 'cancelled'
+            && existing().orderSeq == 0
+            && incoming().status == 'pending_payment'
+            && (isCashier() || existing().customerUid == request.auth.uid)
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'paymentSplit', 'phone', 'updatedAt'
+            ])
           )
         );
       allow delete: if isValidId(orderId) && isAdmin();

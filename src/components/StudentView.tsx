@@ -24,6 +24,7 @@ import {
   cancelOrderBeforePreparing,
   createStudentOrder,
   escalateOrderToCashier,
+  queryStkStatusFallback,
   removeOrderItemBeforePreparing,
   resolveReplacement,
   retryFailedOrderPayment,
@@ -59,6 +60,7 @@ export function StudentView({
   cafeteriaSettings,
   mpesaSettings,
 }: StudentViewProps) {
+  const stkStorageKey = `jawaka_active_stk_${user.uid}`;
   const [tab, setTab] = useState<'menu' | 'orders'>('menu');
   const [selectedCategory, setSelectedCategory] = useState<'All' | MenuCategory>('All');
   const [searchQuery, setSearchQuery] = useState('');
@@ -67,11 +69,25 @@ export function StudentView({
   const [phoneInput, setPhoneInput] = useState(user.phone || '');
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [orderActionError, setOrderActionError] = useState('');
+  const [verifyingOrderId, setVerifyingOrderId] = useState<string | null>(null);
   const [activeReceiptOrder, setActiveReceiptOrder] = useState<Order | null>(null);
   const [stkSession, setStkSession] = useState<{
     checkoutRequestId: string;
     orderId: string;
-  } | null>(null);
+  } | null>(() => {
+    try {
+      const saved = sessionStorage.getItem(`jawaka_active_stk_${user.uid}`);
+      if (!saved) return null;
+      const parsed = JSON.parse(saved) as { checkoutRequestId?: string; orderId?: string };
+      if (parsed.checkoutRequestId && parsed.orderId) {
+        return { checkoutRequestId: parsed.checkoutRequestId, orderId: parsed.orderId };
+      }
+    } catch {
+      // ignore storage errors
+    }
+    return null;
+  });
   const [replacementModal, setReplacementModal] = useState<{
     order: Order;
     removedItemId: string;
@@ -85,9 +101,46 @@ export function StudentView({
   const [nowTick, setNowTick] = useState(Date.now());
 
   useEffect(() => {
+    try {
+      if (stkSession) {
+        sessionStorage.setItem(stkStorageKey, JSON.stringify(stkSession));
+      } else {
+        sessionStorage.removeItem(stkStorageKey);
+      }
+    } catch {
+      // ignore storage errors
+    }
+  }, [stkSession, stkStorageKey]);
+
+  useEffect(() => {
     const t = setInterval(() => setNowTick(Date.now()), 5000);
     return () => clearInterval(t);
   }, []);
+
+  // Reconcile pending M-Pesa orders automatically when mobile tab returns to foreground
+  useEffect(() => {
+    if (mpesaSettings.env === 'mock') return;
+    const pendingOrders = orders.filter(
+      (o) => o.status === 'pending_payment' && Boolean(o.mpesaCheckoutRequestId)
+    );
+    if (pendingOrders.length === 0) return;
+
+    const verifyPending = () => {
+      if (document.visibilityState === 'hidden') return;
+      for (const po of pendingOrders) {
+        if (po.mpesaCheckoutRequestId) {
+          void queryStkStatusFallback(po.mpesaCheckoutRequestId).catch(() => undefined);
+        }
+      }
+    };
+
+    window.addEventListener('focus', verifyPending);
+    document.addEventListener('visibilitychange', verifyPending);
+    return () => {
+      window.removeEventListener('focus', verifyPending);
+      document.removeEventListener('visibilitychange', verifyPending);
+    };
+  }, [orders, mpesaSettings.env]);
 
   // Auto-escalate any needs_attention order older than 5 minutes
   useEffect(() => {
@@ -95,7 +148,7 @@ export function StudentView({
       if (order.status === 'needs_attention' && !order.escalatedToCashier && order.needsAttentionAt) {
         const elapsed = nowTick - toMillis(order.needsAttentionAt);
         if (elapsed >= 5 * 60 * 1000) {
-          void escalateOrderToCashier(order.id);
+          void escalateOrderToCashier(order.id).catch(() => undefined);
         }
       }
     }
@@ -215,7 +268,7 @@ export function StudentView({
   };
 
   return (
-    <div className="max-w-[1440px] mx-auto px-3 sm:px-6 lg:px-8 pb-28 lg:pb-12 pt-4 sm:pt-5 overflow-x-hidden">
+    <div className="max-w-[1440px] mx-auto px-3 sm:px-6 lg:px-8 pb-28 lg:pb-12 pt-4 sm:pt-5 overflow-x-clip">
       {/* Live In-App Notifications for Ready & Needs Attention Orders */}
       {readyOrders.map((o) => (
         <div
@@ -626,6 +679,17 @@ export function StudentView({
       ) : (
         /* Order Tracking & History Tab */
         <div className="space-y-4">
+          {orderActionError && (
+            <div className="bg-[#FCECE9] border border-[#B93829] px-4 py-3 text-xs text-[#B93829] flex items-center justify-between gap-2">
+              <span>{orderActionError}</span>
+              <button
+                onClick={() => setOrderActionError('')}
+                className="font-semibold underline shrink-0"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
           {orders.length === 0 ? (
             <div className="bg-white border border-[#D9CEBC] p-12 text-center">
               <p className="font-display text-xl font-bold text-[#1C1714]">No orders yet</p>
@@ -711,9 +775,16 @@ export function StudentView({
                                 order.items.length > 1 &&
                                 order.paymentSplit.mpesa === 0 && (
                                   <button
-                                    onClick={() =>
-                                      void removeOrderItemBeforePreparing(order, it.itemId, user)
-                                    }
+                                    onClick={async () => {
+                                      setOrderActionError('');
+                                      try {
+                                        await removeOrderItemBeforePreparing(order, it.itemId, user);
+                                      } catch (err) {
+                                        setOrderActionError(
+                                          err instanceof Error ? err.message : 'Could not remove item.'
+                                        );
+                                      }
+                                    }}
                                     className="text-xs text-[#B93829] underline"
                                   >
                                     Remove
@@ -752,23 +823,67 @@ export function StudentView({
 
                       {canEditOrCancel && (
                         <button
-                          onClick={() => void cancelOrderBeforePreparing(order, user)}
+                          onClick={async () => {
+                            setOrderActionError('');
+                            try {
+                              await cancelOrderBeforePreparing(order, user);
+                            } catch (err) {
+                              setOrderActionError(
+                                err instanceof Error ? err.message : 'Could not cancel order.'
+                              );
+                            }
+                          }}
                           className="min-h-[40px] px-3.5 py-1.5 border border-[#B93829] text-[#B93829] text-xs font-semibold hover:bg-[#FCECE9]"
                         >
                           Cancel Order
                         </button>
                       )}
 
+                      {order.status === 'pending_payment' &&
+                        order.mpesaCheckoutRequestId &&
+                        mpesaSettings.env !== 'mock' && (
+                          <button
+                            disabled={verifyingOrderId === order.id}
+                            onClick={async () => {
+                              setOrderActionError('');
+                              setVerifyingOrderId(order.id);
+                              try {
+                                await queryStkStatusFallback(order.mpesaCheckoutRequestId!);
+                              } catch (err) {
+                                setOrderActionError(
+                                  err instanceof Error
+                                    ? err.message
+                                    : 'Could not verify M-Pesa payment status.'
+                                );
+                              } finally {
+                                setVerifyingOrderId(null);
+                              }
+                            }}
+                            className="min-h-[40px] px-3.5 py-1.5 bg-[#2E6F40] text-white text-xs font-semibold disabled:opacity-50"
+                          >
+                            {verifyingOrderId === order.id ? 'Checking...' : 'Verify M-Pesa'}
+                          </button>
+                        )}
+
                       {canRetry && order.paymentSplit.mpesa > 0 && order.mpesaCheckoutRequestId && (
                         <button
                           onClick={async () => {
-                            const id = await retryFailedOrderPayment({
-                              order,
-                              phone: order.phone || user.phone || '0712345678',
-                              cafeteriaSettings,
-                              mpesaSettings,
-                            });
-                            setStkSession({ checkoutRequestId: id, orderId: order.id });
+                            setOrderActionError('');
+                            try {
+                              const id = await retryFailedOrderPayment({
+                                order,
+                                phone: order.phone || user.phone || '0712345678',
+                                cafeteriaSettings,
+                                mpesaSettings,
+                              });
+                              setStkSession({ checkoutRequestId: id, orderId: order.id });
+                            } catch (err) {
+                              setOrderActionError(
+                                err instanceof Error
+                                  ? err.message
+                                  : 'Could not retry M-Pesa payment.'
+                              );
+                            }
                           }}
                           className="min-h-[40px] px-3.5 py-1.5 bg-[#B93829] text-white text-xs font-semibold"
                         >

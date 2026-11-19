@@ -29,6 +29,10 @@ service cloud.firestore {
       return isSignedIn() && request.auth.token.email_verified == true;
     }
 
+    function isNonAnonymous() {
+      return isSignedIn() && request.auth.token.firebase.sign_in_provider != 'anonymous';
+    }
+
     function isBootstrappedAdmin() {
       return isVerified() && request.auth.token.email == 'gmannu2055@gmail.com';
     }
@@ -42,15 +46,15 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return isBootstrappedAdmin() || (isVerified() && userDocExists() && userRole() == 'admin');
+      return isBootstrappedAdmin() || (isNonAnonymous() && userDocExists() && userRole() == 'admin');
     }
 
     function isCashier() {
-      return isAdmin() || (isVerified() && userDocExists() && userRole() == 'cashier');
+      return isAdmin() || (isNonAnonymous() && userDocExists() && userRole() == 'cashier');
     }
 
     function isKitchen() {
-      return isAdmin() || (isVerified() && userDocExists() && userRole() == 'kitchen');
+      return isAdmin() || (isNonAnonymous() && userDocExists() && userRole() == 'kitchen');
     }
 
     function isStaff() {
@@ -66,7 +70,7 @@ service cloud.firestore {
       return data.keys().hasAll(['uid', 'email', 'displayName', 'role', 'createdAt', 'updatedAt'])
         && data.keys().hasOnly([
           'uid', 'email', 'displayName', 'role', 'studentType',
-          'studentNumber', 'phone', 'pinHash', 'createdAt', 'updatedAt'
+          'studentNumber', 'phone', 'pinHash', 'isGuest', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.uid)
         && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
@@ -76,6 +80,7 @@ service cloud.firestore {
         && (!('studentNumber' in data) || (data.studentNumber is string && data.studentNumber.size() >= 2 && data.studentNumber.size() <= 32))
         && (!('phone' in data) || (data.phone is string && data.phone.size() >= 9 && data.phone.size() <= 15 && data.phone.matches('^254[0-9]{9}$')))
         && (!('pinHash' in data) || (data.pinHash is string && data.pinHash.size() >= 4 && data.pinHash.size() <= 128))
+        && (!('isGuest' in data) || data.isGuest is bool)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -260,17 +265,24 @@ service cloud.firestore {
         isAdmin()
       );
       allow create: if isValidId(userId)
-        && isVerified()
+        && isSignedIn()
         && isValidUser(incoming())
         && incoming().uid == userId
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time
         && (
           isAdmin() ||
-          (isOwner(userId) && incoming().role == 'student')
+          (
+            isOwner(userId)
+            && incoming().role == 'student'
+            && (
+              (request.auth.token.firebase.sign_in_provider == 'anonymous' && incoming().studentType == 'commuter' && incoming().isGuest == true) ||
+              (request.auth.token.firebase.sign_in_provider != 'anonymous' && (!('isGuest' in incoming()) || incoming().isGuest == false))
+            )
+          )
         );
       allow update: if isValidId(userId)
-        && isVerified()
+        && isSignedIn()
         && isValidUser(incoming())
         && incoming().uid == existing().uid
         && incoming().createdAt == existing().createdAt
@@ -280,8 +292,9 @@ service cloud.firestore {
           (
             isOwner(userId)
             && incoming().role == existing().role
+            && (!('isGuest' in existing()) || existing().isGuest == false || incoming().studentType == 'commuter')
             && incoming().diff(existing()).affectedKeys().hasOnly([
-              'displayName', 'studentType', 'studentNumber', 'phone', 'pinHash', 'updatedAt'
+              'displayName', 'studentType', 'studentNumber', 'phone', 'pinHash', 'isGuest', 'updatedAt'
             ])
           )
         );
@@ -292,7 +305,7 @@ service cloud.firestore {
       allow get: if isValidId(lookupId) && isSignedIn() && (isCashier() || isAdmin() || resource == null || resource.data.uid == request.auth.uid);
       allow list: if false;
       allow create, update: if isValidId(lookupId)
-        && isVerified()
+        && isNonAnonymous()
         && isValidStudentLookup(incoming())
         && incoming().updatedAt == request.time
         && (isAdmin() || incoming().uid == request.auth.uid);
@@ -300,14 +313,14 @@ service cloud.firestore {
     }
 
     match /menuItems/{itemId} {
-      allow get, list: if true;
+      allow get, list: if isSignedIn();
       allow create: if isValidId(itemId)
         && isAdmin()
         && isValidMenuItem(incoming())
         && incoming().id == itemId
         && incoming().updatedAt == request.time;
       allow update: if isValidId(itemId)
-        && isVerified()
+        && isNonAnonymous()
         && isValidMenuItem(incoming())
         && incoming().id == existing().id
         && incoming().updatedAt == request.time
@@ -322,7 +335,7 @@ service cloud.firestore {
     }
 
     match /settings/{settingId} {
-      allow get: if isValidId(settingId) && settingId in ['cafeteria', 'mpesa'];
+      allow get: if isValidId(settingId) && isSignedIn() && (settingId == 'cafeteria' || settingId == 'mpesa');
       allow list: if isAdmin();
       allow create, update: if isValidId(settingId)
         && isAdmin()
@@ -338,12 +351,12 @@ service cloud.firestore {
       allow get: if isValidId(dateId) && isSignedIn();
       allow list: if isAdmin();
       allow create: if isValidId(dateId)
-        && isVerified()
+        && isSignedIn()
         && isValidDailyCounter(incoming())
         && incoming().date == dateId
         && incoming().updatedAt == request.time;
       allow update: if isValidId(dateId)
-        && isVerified()
+        && isSignedIn()
         && isValidDailyCounter(incoming())
         && incoming().date == existing().date
         && incoming().lastOrderSeq >= existing().lastOrderSeq
@@ -362,7 +375,7 @@ service cloud.firestore {
         isAdmin()
       );
       allow create: if isValidId(usageId)
-        && isVerified()
+        && isNonAnonymous()
         && isValidAllowanceUsage(incoming())
         && incoming().updatedAt == request.time
         && (
@@ -371,7 +384,7 @@ service cloud.firestore {
           incoming().uid == request.auth.uid
         );
       allow update: if isValidId(usageId)
-        && isVerified()
+        && isNonAnonymous()
         && isValidAllowanceUsage(incoming())
         && incoming().uid == existing().uid
         && incoming().date == existing().date
@@ -394,7 +407,7 @@ service cloud.firestore {
         isStaff()
       );
       allow create: if isValidId(orderId)
-        && isVerified()
+        && isSignedIn()
         && isValidOrder(incoming())
         && incoming().id == orderId
         && incoming().createdAt == request.time
@@ -404,7 +417,7 @@ service cloud.firestore {
           (incoming().entryPoint == 'student_app' && incoming().customerUid == request.auth.uid)
         );
       allow update: if isValidId(orderId)
-        && isVerified()
+        && isSignedIn()
         && isValidOrder(incoming())
         && incoming().id == existing().id
         && incoming().createdAt == existing().createdAt
@@ -423,28 +436,39 @@ service cloud.firestore {
                   'status', 'needsAttentionItems', 'needsAttentionAt', 'escalatedToCashier', 'updatedAt'
                 ])
               ) ||
-              // Cashier transitions & payouts
+              // Cashier transitions, STK phone updates & payouts
               (
                 isCashier()
                 && incoming().diff(existing()).affectedKeys().hasOnly([
                   'orderNumber', 'orderSeq', 'status', 'items', 'totalAmount',
-                  'paymentSplit', 'mpesaReceiptNumber', 'mpesaManual', 'mpesaCheckoutRequestId',
+                  'paymentSplit', 'phone', 'mpesaReceiptNumber', 'mpesaManual', 'mpesaCheckoutRequestId',
                   'cashBackDue', 'cashBackPaid', 'cashBackPaidAt', 'cashBackPaidBy',
-                  'needsAttentionItems', 'escalatedToCashier', 'paidAt', 'updatedAt'
+                  'mpesaRefundFlag', 'needsAttentionItems', 'escalatedToCashier', 'paidAt', 'updatedAt'
                 ])
               ) ||
-              // Student own-order actions (payment settle, edit/cancel before preparing, pick replacement)
+              // Student own-order actions (payment settle, edit/cancel before preparing, escalate, pick replacement)
               (
                 existing().customerUid == request.auth.uid
                 && existing().status in ['pending_payment', 'paid', 'needs_attention']
+                && incoming().status in ['pending_payment', 'paid', 'needs_attention', 'cancelled']
                 && incoming().diff(existing()).affectedKeys().hasOnly([
                   'orderNumber', 'orderSeq', 'status', 'items', 'totalAmount',
-                  'paymentSplit', 'mpesaReceiptNumber', 'mpesaCheckoutRequestId',
-                  'cashBackDue', 'mpesaRefundFlag', 'needsAttentionItems',
+                  'paymentSplit', 'phone', 'mpesaReceiptNumber', 'mpesaCheckoutRequestId',
+                  'cashBackDue', 'mpesaRefundFlag', 'needsAttentionItems', 'escalatedToCashier',
                   'paidAt', 'updatedAt'
                 ])
               )
             )
+          ) ||
+          // Retry failed/timed-out unpaid STK Push order (cancelled while orderSeq == 0 -> pending_payment)
+          (
+            existing().status == 'cancelled'
+            && existing().orderSeq == 0
+            && incoming().status == 'pending_payment'
+            && (isCashier() || existing().customerUid == request.auth.uid)
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'paymentSplit', 'phone', 'updatedAt'
+            ])
           )
         );
       allow delete: if isValidId(orderId) && isAdmin();
@@ -462,7 +486,7 @@ service cloud.firestore {
         isAdmin()
       );
       allow create: if isValidId(checkoutRequestId)
-        && isVerified()
+        && isSignedIn()
         && isValidPayment(incoming())
         && incoming().checkoutRequestId == checkoutRequestId
         && incoming().createdAt == request.time
@@ -473,7 +497,7 @@ service cloud.firestore {
           incoming().customerUid == request.auth.uid
         );
       allow update: if isValidId(checkoutRequestId)
-        && isVerified()
+        && isSignedIn()
         && isValidPayment(incoming())
         && incoming().checkoutRequestId == existing().checkoutRequestId
         && incoming().orderId == existing().orderId
@@ -499,7 +523,7 @@ service cloud.firestore {
     match /boardOrders/{orderId} {
       allow get, list: if true;
       allow create: if isValidId(orderId)
-        && isVerified()
+        && isSignedIn()
         && isValidBoardOrder(incoming())
         && incoming().orderId == orderId
         && incoming().updatedAt == request.time
@@ -508,7 +532,7 @@ service cloud.firestore {
           existsAfter(/databases/$(database)/documents/orders/$(orderId))
         );
       allow update: if isValidId(orderId)
-        && isVerified()
+        && isSignedIn()
         && isValidBoardOrder(incoming())
         && incoming().orderId == existing().orderId
         && incoming().updatedAt == request.time
@@ -526,7 +550,7 @@ service cloud.firestore {
         resource.data.actorUid == request.auth.uid
       );
       allow create: if isValidId(logId)
-        && isVerified()
+        && isSignedIn()
         && isValidAuditLog(incoming())
         && incoming().actorUid == request.auth.uid
         && incoming().createdAt == request.time;

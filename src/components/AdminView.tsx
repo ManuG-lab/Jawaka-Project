@@ -67,6 +67,7 @@ export function AdminView({
   const [savingUid, setSavingUid] = useState<string | null>(null);
   const [savedUid, setSavedUid] = useState<string | null>(null);
   const [userActionError, setUserActionError] = useState('');
+  const [adminActionError, setAdminActionError] = useState('');
 
   const today = getNairobiDateString();
 
@@ -278,27 +279,43 @@ export function AdminView({
   const handleSaveMenu = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!itemName.trim()) return;
-    await adminSaveMenuItem(
-      {
-        id: editingItemId,
-        name: itemName,
-        category: itemCategory,
-        price: Number(itemPrice) || 0,
-        active: itemActive,
-        sortOrder: editingItemId
-          ? menuItems.find((m) => m.id === editingItemId)?.sortOrder || menuItems.length + 1
-          : menuItems.length + 1,
-      },
-      admin
-    );
-    setEditingItemId(undefined);
-    setItemName('');
-    setItemPrice('100');
-    setItemActive(true);
+    setAdminActionError('');
+    try {
+      await adminSaveMenuItem(
+        {
+          id: editingItemId,
+          name: itemName,
+          category: itemCategory,
+          price: Number(itemPrice) || 0,
+          active: itemActive,
+          sortOrder: editingItemId
+            ? menuItems.find((m) => m.id === editingItemId)?.sortOrder || menuItems.length + 1
+            : menuItems.length + 1,
+        },
+        admin
+      );
+      setEditingItemId(undefined);
+      setItemName('');
+      setItemPrice('100');
+      setItemActive(true);
+    } catch (err) {
+      setAdminActionError(err instanceof Error ? err.message : 'Could not save menu item.');
+    }
   };
 
   return (
-    <div className="max-w-[1600px] mx-auto px-3 sm:px-4 lg:px-6 py-4 sm:py-5 space-y-5 overflow-x-hidden">
+    <div className="max-w-[1600px] mx-auto px-3 sm:px-4 lg:px-6 py-4 sm:py-5 space-y-5 overflow-x-clip">
+      {adminActionError && (
+        <div className="bg-[#FCECE9] border border-[#B93829] px-4 py-2.5 text-xs text-[#B93829] flex items-center justify-between gap-2">
+          <span>{adminActionError}</span>
+          <button
+            onClick={() => setAdminActionError('')}
+            className="font-semibold underline shrink-0"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
       {/* Sub-navigation */}
       <div className="flex items-center gap-2 overflow-x-auto border-b border-[#D9CEBC] pb-3">
         {(
@@ -636,7 +653,16 @@ export function AdminView({
                       )}
                       {usedAmt > 0 && (
                         <button
-                          onClick={() => void adminResetStudentAllowance(u, dailyLimit, admin)}
+                          onClick={async () => {
+                            setUserActionError('');
+                            try {
+                              await adminResetStudentAllowance(u, dailyLimit, admin);
+                            } catch (err) {
+                              setUserActionError(
+                                err instanceof Error ? err.message : 'Could not reset quota.'
+                              );
+                            }
+                          }}
                           className="min-h-[38px] px-2.5 border border-[#D9CEBC] bg-white text-xs font-semibold flex items-center gap-1"
                         >
                           <RotateCcw className="w-3.5 h-3.5" />
@@ -752,7 +778,16 @@ export function AdminView({
                           {usedAmt > 0 && (
                             <button
                               title="Reset today's allowance usage to 0"
-                              onClick={() => void adminResetStudentAllowance(u, dailyLimit, admin)}
+                              onClick={async () => {
+                                setUserActionError('');
+                                try {
+                                  await adminResetStudentAllowance(u, dailyLimit, admin);
+                                } catch (err) {
+                                  setUserActionError(
+                                    err instanceof Error ? err.message : 'Could not reset quota.'
+                                  );
+                                }
+                              }}
                               className="px-2 py-1 border border-[#D9CEBC] text-[11px] hover:border-[#1C1714] flex items-center gap-1"
                             >
                               <RotateCcw className="w-3 h-3" />
@@ -914,12 +949,19 @@ export function AdminView({
               <button
                 type="button"
                 onClick={async () => {
-                  const count = await seedMenuAndSettings(admin);
-                  setSeedMessage(
-                    count > 0
-                      ? `Added ${count} missing seed menu items.`
-                      : 'All 72 seed menu items are already present.'
-                  );
+                  setAdminActionError('');
+                  try {
+                    const count = await seedMenuAndSettings(admin);
+                    setSeedMessage(
+                      count > 0
+                        ? `Added ${count} missing seed menu items.`
+                        : 'All 72 seed menu items are already present.'
+                    );
+                  } catch (err) {
+                    setAdminActionError(
+                      err instanceof Error ? err.message : 'Could not verify or seed menu.'
+                    );
+                  }
                 }}
                 className="w-full min-h-[42px] border border-[#1C1714] text-xs font-semibold flex items-center justify-center gap-2 hover:bg-[#FAF6EE]"
               >
@@ -961,7 +1003,16 @@ export function AdminView({
                       Edit
                     </button>
                     <button
-                      onClick={() => void adminDeleteMenuItem(m, admin)}
+                      onClick={async () => {
+                        setAdminActionError('');
+                        try {
+                          await adminDeleteMenuItem(m, admin);
+                        } catch (err) {
+                          setAdminActionError(
+                            err instanceof Error ? err.message : 'Could not delete menu item.'
+                          );
+                        }
+                      }}
                       aria-label={`Delete ${m.name}`}
                       className="min-h-[36px] min-w-[36px] flex items-center justify-center text-[#B93829]"
                     >
@@ -1016,7 +1067,16 @@ export function AdminView({
                           Edit
                         </button>
                         <button
-                          onClick={() => void adminDeleteMenuItem(m, admin)}
+                          onClick={async () => {
+                            setAdminActionError('');
+                            try {
+                              await adminDeleteMenuItem(m, admin);
+                            } catch (err) {
+                              setAdminActionError(
+                                err instanceof Error ? err.message : 'Could not delete menu item.'
+                              );
+                            }
+                          }}
                           aria-label={`Delete ${m.name}`}
                           className="text-[#B93829] inline-flex align-middle"
                         >
@@ -1092,17 +1152,24 @@ export function AdminView({
 
             <button
               onClick={async () => {
-                await adminUpdateCafeteriaSettings(
-                  {
-                    openTime,
-                    closeTime,
-                    cutoffMinutesBeforeClose: Number(cutoffMins) || 0,
-                    dailyAllowance: Number(dailyAllowance) || 350,
-                    timezone: 'Africa/Nairobi',
-                  },
-                  admin
-                );
-                setSettingsSaved('Cafeteria hours & allowance saved.');
+                setAdminActionError('');
+                try {
+                  await adminUpdateCafeteriaSettings(
+                    {
+                      openTime,
+                      closeTime,
+                      cutoffMinutesBeforeClose: Number(cutoffMins) || 0,
+                      dailyAllowance: Number(dailyAllowance) || 350,
+                      timezone: 'Africa/Nairobi',
+                    },
+                    admin
+                  );
+                  setSettingsSaved('Cafeteria hours & allowance saved.');
+                } catch (err) {
+                  setAdminActionError(
+                    err instanceof Error ? err.message : 'Could not save cafeteria settings.'
+                  );
+                }
               }}
               className="min-h-[44px] px-5 py-2 bg-[#1C1714] text-[#FAF6EE] text-sm font-semibold flex items-center gap-2"
             >
@@ -1124,23 +1191,30 @@ export function AdminView({
               <button
                 type="button"
                 onClick={async () => {
+                  setAdminActionError('');
                   setMpesaEnv('production');
                   setTxType('CustomerBuyGoodsOnline');
                   setShortcode('1334820');
                   setTillNumber('1804698');
-                  await adminUpdateMpesaSettings(
-                    {
-                      env: 'production',
-                      tillNumber: '1804698',
-                      shortcode: '1334820',
-                      transactionType: 'CustomerBuyGoodsOnline',
-                      mockOutcome,
-                    },
-                    admin
-                  );
-                  setMpesaSaved(
-                    'Live Production settings saved (Shortcode 1334820 · Till 1804698).'
-                  );
+                  try {
+                    await adminUpdateMpesaSettings(
+                      {
+                        env: 'production',
+                        tillNumber: '1804698',
+                        shortcode: '1334820',
+                        transactionType: 'CustomerBuyGoodsOnline',
+                        mockOutcome,
+                      },
+                      admin
+                    );
+                    setMpesaSaved(
+                      'Live Production settings saved (Shortcode 1334820 · Till 1804698).'
+                    );
+                  } catch (err) {
+                    setAdminActionError(
+                      err instanceof Error ? err.message : 'Could not save M-Pesa settings.'
+                    );
+                  }
                 }}
                 className="min-h-[38px] px-3 py-1.5 bg-[#2E6F40] text-white text-xs font-semibold hover:bg-[#245932] shrink-0"
               >
@@ -1237,17 +1311,24 @@ export function AdminView({
 
             <button
               onClick={async () => {
-                await adminUpdateMpesaSettings(
-                  {
-                    env: mpesaEnv,
-                    tillNumber: tillNumber.trim(),
-                    shortcode: shortcode.trim(),
-                    transactionType: txType,
-                    mockOutcome,
-                  },
-                  admin
-                );
-                setMpesaSaved('M-Pesa settings updated.');
+                setAdminActionError('');
+                try {
+                  await adminUpdateMpesaSettings(
+                    {
+                      env: mpesaEnv,
+                      tillNumber: tillNumber.trim(),
+                      shortcode: shortcode.trim(),
+                      transactionType: txType,
+                      mockOutcome,
+                    },
+                    admin
+                  );
+                  setMpesaSaved('M-Pesa settings updated.');
+                } catch (err) {
+                  setAdminActionError(
+                    err instanceof Error ? err.message : 'Could not save M-Pesa settings.'
+                  );
+                }
               }}
               className="min-h-[44px] px-5 py-2 bg-[#1C1714] text-[#FAF6EE] text-sm font-semibold flex items-center gap-2"
             >

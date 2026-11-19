@@ -174,6 +174,9 @@ export async function saveUserProfile(params: {
 
   const cleanPhone = phone && phone.trim() ? normalizeKenyanPhone(phone) : undefined;
   const cleanStudentNo = studentNumber?.trim().toUpperCase();
+  if (cleanStudentNo && cleanStudentNo.length < 2) {
+    throw new Error('Student number must be at least 2 characters.');
+  }
   const pinHash = pin && pin.trim().length >= 4 ? await hashPin(pin) : existingPinHash;
 
   const userPayload: Record<string, unknown> = {
@@ -220,24 +223,36 @@ export async function lookupStudentByNumber(
   pin: string
 ): Promise<{ lookup: StudentLookupRecord; usage: AllowanceUsage | null }> {
   const lookupId = sanitizeLookupId(studentNumber);
-  if (!lookupId) throw new Error('Enter a valid student number.');
+  if (!lookupId || lookupId.length < 2) throw new Error('Enter a valid student number.');
 
-  const snap = await getDoc(doc(db, 'studentLookup', lookupId));
-  if (!snap.exists()) {
-    throw new Error(`No student registered with number "${studentNumber.toUpperCase()}".`);
-  }
-  const lookup = snap.data() as StudentLookupRecord;
-  const enteredHash = await hashPin(pin);
-  if (enteredHash !== lookup.pinHash) {
-    throw new Error('Incorrect 4-digit student PIN.');
-  }
+  try {
+    const snap = await getDoc(doc(db, 'studentLookup', lookupId));
+    if (!snap.exists()) {
+      throw new Error(`No student registered with number "${studentNumber.toUpperCase()}".`);
+    }
+    const lookup = snap.data() as StudentLookupRecord;
+    const enteredHash = await hashPin(pin);
+    if (enteredHash !== lookup.pinHash) {
+      throw new Error('Incorrect 4-digit student PIN.');
+    }
 
-  const today = getNairobiDateString();
-  const usageSnap = await getDoc(doc(db, 'allowanceUsage', `${lookup.uid}_${today}`));
-  return {
-    lookup,
-    usage: usageSnap.exists() ? (usageSnap.data() as AllowanceUsage) : null,
-  };
+    const today = getNairobiDateString();
+    const usageSnap = await getDoc(doc(db, 'allowanceUsage', `${lookup.uid}_${today}`));
+    return {
+      lookup,
+      usage: usageSnap.exists() ? (usageSnap.data() as AllowanceUsage) : null,
+    };
+  } catch (err) {
+    if (
+      err instanceof Error &&
+      (err.message.startsWith('No student registered') ||
+        err.message.startsWith('Incorrect 4-digit') ||
+        err.message.startsWith('{'))
+    ) {
+      throw err;
+    }
+    handleFirestoreError(err, OperationType.GET, `studentLookup/${lookupId}`);
+  }
 }
 
 export async function createStudentOrder(params: {
@@ -249,6 +264,7 @@ export async function createStudentOrder(params: {
 }): Promise<{ orderId: string; mpesaDue: number; checkoutRequestId?: string }> {
   const { user, cart, cafeteriaSettings, mpesaSettings, phoneInput } = params;
   if (cart.length === 0) throw new Error('Your tray is empty.');
+  if (cart.length > 30) throw new Error('Maximum 30 distinct dishes per order.');
 
   const hours = isCafeteriaOpenForOrders(cafeteriaSettings);
   if (!hours.open) {
@@ -290,6 +306,9 @@ export async function createStudentOrder(params: {
           quantity: c.quantity,
         });
         totalAmount += live.price * c.quantity;
+      }
+      if (totalAmount > 500000) {
+        throw new Error('Order total cannot exceed KSh 500,000.');
       }
 
       const dailyLimit = Number(cafeteriaSettings.dailyAllowance ?? 350);
@@ -456,6 +475,7 @@ export async function createCashierOrder(params: {
   } = params;
 
   if (cart.length === 0) throw new Error('Add items to the order first.');
+  if (cart.length > 30) throw new Error('Maximum 30 distinct dishes per order.');
 
   const hours = isCafeteriaOpenForOrders(cafeteriaSettings);
   if (!hours.open) {
@@ -498,6 +518,9 @@ export async function createCashierOrder(params: {
           quantity: c.quantity,
         });
         totalAmount += live.price * c.quantity;
+      }
+      if (totalAmount > 500000) {
+        throw new Error('Order total cannot exceed KSh 500,000.');
       }
 
       const dailyLimit = Number(cafeteriaSettings.dailyAllowance ?? 350);
@@ -928,45 +951,75 @@ export async function retryFailedOrderPayment(params: {
 }): Promise<string> {
   const { order, phone, cafeteriaSettings, mpesaSettings } = params;
   const normalizedPhone = normalizeKenyanPhone(phone);
+
+  // Safety check: if the previous STK prompt already completed while mobile browser was backgrounded,
+  // settle & return that checkoutRequestId instead of sending a duplicate STK charge.
+  if (
+    order.status === 'pending_payment' &&
+    order.mpesaCheckoutRequestId &&
+    mpesaSettings.env !== 'mock'
+  ) {
+    try {
+      const check = await queryStkStatusFallback(order.mpesaCheckoutRequestId);
+      if (check.status === 'completed') {
+        return order.mpesaCheckoutRequestId;
+      }
+    } catch {
+      // Proceed to retry if status check could not confirm completion
+    }
+  }
+
   const today = getNairobiDateString();
   const usageRef = doc(db, 'allowanceUsage', `${order.customerUid}_${today}`);
 
   // Re-reserve allowance if the order had timed out/cancelled and user hits Retry
-  await runTransaction(db, async (tx) => {
-    const orderSnap = await tx.get(doc(db, 'orders', order.id));
-    if (!orderSnap.exists()) throw new Error('Order not found.');
-    const liveOrder = orderSnap.data() as Order;
-    let allowancePortion = liveOrder.paymentSplit.allowance;
+  try {
+    await runTransaction(db, async (tx) => {
+      const orderSnap = await tx.get(doc(db, 'orders', order.id));
+      if (!orderSnap.exists()) throw new Error('Order not found.');
+      const liveOrder = orderSnap.data() as Order;
+      if (liveOrder.status === 'cancelled' && liveOrder.orderSeq > 0) {
+        throw new Error('Cancelled orders that were already ticketed cannot be retried.');
+      }
+      let allowancePortion = liveOrder.paymentSplit.allowance;
 
-    if (liveOrder.status === 'cancelled' && allowancePortion > 0 && liveOrder.customerUid !== 'walk_in') {
-      const usageSnap = await tx.get(usageRef);
-      const dailyLimit = Number(cafeteriaSettings.dailyAllowance ?? 350);
-      const currentUsed = usageSnap.exists() ? Number(usageSnap.data().used || 0) : 0;
-      const currentReserved = usageSnap.exists() ? Number(usageSnap.data().reserved || 0) : 0;
-      const remaining = Math.max(0, dailyLimit - currentUsed - currentReserved);
-      allowancePortion = Math.min(remaining, liveOrder.totalAmount);
-      tx.set(usageRef, {
-        uid: liveOrder.customerUid,
-        date: today,
-        used: currentUsed,
-        reserved: currentReserved + allowancePortion,
-        dailyLimit,
+      if (liveOrder.status === 'cancelled' && allowancePortion > 0 && liveOrder.customerUid !== 'walk_in') {
+        const usageSnap = await tx.get(usageRef);
+        const dailyLimit = Number(cafeteriaSettings.dailyAllowance ?? 350);
+        const currentUsed = usageSnap.exists() ? Number(usageSnap.data().used || 0) : 0;
+        const currentReserved = usageSnap.exists() ? Number(usageSnap.data().reserved || 0) : 0;
+        const remaining = Math.max(0, dailyLimit - currentUsed - currentReserved);
+        allowancePortion = Math.min(remaining, liveOrder.totalAmount);
+        if (allowancePortion > 0) {
+          tx.set(usageRef, {
+            uid: liveOrder.customerUid,
+            date: today,
+            used: currentUsed,
+            reserved: currentReserved + allowancePortion,
+            dailyLimit,
+            updatedAt: serverTimestamp(),
+          });
+        }
+      }
+
+      const mpesaDue = Math.max(0, liveOrder.totalAmount - allowancePortion - liveOrder.paymentSplit.cash);
+      tx.update(doc(db, 'orders', order.id), {
+        status: 'pending_payment',
+        paymentSplit: {
+          allowance: allowancePortion,
+          mpesa: mpesaDue,
+          cash: liveOrder.paymentSplit.cash,
+        },
+        phone: normalizedPhone,
         updatedAt: serverTimestamp(),
       });
-    }
-
-    const mpesaDue = Math.max(0, liveOrder.totalAmount - allowancePortion - liveOrder.paymentSplit.cash);
-    tx.update(doc(db, 'orders', order.id), {
-      status: 'pending_payment',
-      paymentSplit: {
-        allowance: allowancePortion,
-        mpesa: mpesaDue,
-        cash: liveOrder.paymentSplit.cash,
-      },
-      phone: normalizedPhone,
-      updatedAt: serverTimestamp(),
     });
-  });
+  } catch (err) {
+    if (err instanceof Error && (err.message === 'Order not found.' || err.message.startsWith('{'))) {
+      throw err;
+    }
+    handleFirestoreError(err, OperationType.WRITE, `orders/${order.id}`);
+  }
 
   return triggerStkPush({ orderId: order.id, phone: normalizedPhone, mpesaSettings });
 }
@@ -1118,6 +1171,7 @@ export async function resolveReplacement(params: {
   const today = order.dailyDate || getNairobiDateString();
   let extraMpesaDue = 0;
   let cashBackAdded = 0;
+  let resolvedPhoneForStk: string | undefined;
 
   try {
     await runTransaction(db, async (tx) => {
@@ -1225,6 +1279,11 @@ export async function resolveReplacement(params: {
           if (extraPaymentChannel === 'cash' && (actor.role === 'cashier' || actor.role === 'admin')) {
             nextCash += remainingExtra;
           } else {
+            const rawPhone = (phoneInput || liveOrder.phone || '').trim();
+            if (!rawPhone) {
+              throw new Error('Phone number required to pay the price difference via M-Pesa.');
+            }
+            resolvedPhoneForStk = normalizeKenyanPhone(rawPhone);
             extraMpesaDue = remainingExtra;
             nextMpesa += remainingExtra;
           }
@@ -1256,6 +1315,7 @@ export async function resolveReplacement(params: {
         items: nextItems,
         totalAmount: nextTotal,
         paymentSplit: { allowance: nextAllowance, mpesa: nextMpesa, cash: nextCash },
+        ...(resolvedPhoneForStk ? { phone: resolvedPhoneForStk } : {}),
         cashBackDue: nextCashBackDue,
         needsAttentionItems: remainingAttention,
         status: resolvedStatus,
@@ -1287,14 +1347,10 @@ export async function resolveReplacement(params: {
       details: `Order ${order.orderNumber}: replaced item with ${replacementItem.name} (${replacementItem.price} KSh).`,
     });
 
-    if (extraMpesaDue > 0) {
-      const targetPhone = phoneInput || order.phone;
-      if (!targetPhone) {
-        throw new Error('Phone number required to pay the price difference via M-Pesa.');
-      }
+    if (extraMpesaDue > 0 && resolvedPhoneForStk) {
       const checkoutRequestId = await triggerStkPush({
         orderId: order.id,
-        phone: targetPhone,
+        phone: resolvedPhoneForStk,
         mpesaSettings,
         extraAmountOnly: extraMpesaDue,
       });
@@ -1500,25 +1556,37 @@ export async function escalateOrderToCashier(orderId: string) {
 }
 
 export async function adminSaveMenuItem(
-  item: { id?: string; name: string; category: MenuCategory; price: number; active: boolean; sortOrder: number },
+  item: {
+    id?: string;
+    name: string;
+    category: MenuCategory;
+    price: number;
+    active: boolean;
+    soldOut?: boolean;
+    sortOrder: number;
+  },
   admin: UserProfile
 ) {
+  const cleanName = item.name.trim().slice(0, 100);
+  if (!cleanName) throw new Error('Dish name is required.');
+  const cleanPrice = Math.min(100000, Math.max(0, Math.round(Number(item.price) || 0)));
+
   const id =
     item.id ||
-    `${item.category.toLowerCase().replace(/[^a-z0-9]+/g, '_')}_${item.name
+    `${item.category.toLowerCase().replace(/[^a-z0-9]+/g, '_')}_${cleanName
       .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '_')}_${Date.now().toString(36)}`;
+      .replace(/[^a-z0-9]+/g, '_')}_${Date.now().toString(36)}`.slice(0, 120);
   try {
     await setDoc(
       doc(db, 'menuItems', id),
       {
         id,
-        name: item.name.trim(),
+        name: cleanName,
         category: item.category,
-        price: Math.max(0, Math.round(item.price)),
+        price: cleanPrice,
         active: item.active,
-        soldOut: false,
-        sortOrder: item.sortOrder,
+        soldOut: Boolean(item.soldOut),
+        sortOrder: Math.max(0, Math.round(item.sortOrder)),
         updatedAt: serverTimestamp(),
       },
       { merge: true }
@@ -1528,7 +1596,7 @@ export async function adminSaveMenuItem(
       actor: admin,
       targetType: 'menuItems',
       targetId: id,
-      details: `${item.id ? 'Updated' : 'Created'} ${item.name} (${item.category}) at KSh ${item.price}.`,
+      details: `${item.id ? 'Updated' : 'Created'} ${cleanName} (${item.category}) at KSh ${cleanPrice}.`,
     });
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, `menuItems/${id}`);

@@ -23,6 +23,7 @@ import {
   createCashierOrder,
   lookupStudentByNumber,
   markCashBackPaid,
+  queryStkStatusFallback,
   resolveReplacement,
   retryFailedOrderPayment,
 } from '../services/jawakaService';
@@ -86,17 +87,43 @@ export function CashierView({
   const [manualReceiptCode, setManualReceiptCode] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
+  const [queueActionError, setQueueActionError] = useState('');
   const [actionBusyId, setActionBusyId] = useState<string | null>(null);
 
   // Modals
+  const cashierStkKey = `jawaka_cashier_stk_${cashier.uid}`;
   const [receiptOrder, setReceiptOrder] = useState<Order | null>(null);
   const [pendingReceiptOrderId, setPendingReceiptOrderId] = useState<string | null>(null);
   const [stkSession, setStkSession] = useState<{
     checkoutRequestId: string;
     orderId: string;
-  } | null>(null);
+  } | null>(() => {
+    try {
+      const saved = sessionStorage.getItem(`jawaka_cashier_stk_${cashier.uid}`);
+      if (!saved) return null;
+      const parsed = JSON.parse(saved) as { checkoutRequestId?: string; orderId?: string };
+      if (parsed.checkoutRequestId && parsed.orderId) {
+        return { checkoutRequestId: parsed.checkoutRequestId, orderId: parsed.orderId };
+      }
+    } catch {
+      // ignore storage errors
+    }
+    return null;
+  });
   const [escalatedReplaceOrder, setEscalatedReplaceOrder] = useState<Order | null>(null);
   const [replaceExtraChannel, setReplaceExtraChannel] = useState<'cash' | 'mpesa_stk'>('cash');
+
+  useEffect(() => {
+    try {
+      if (stkSession) {
+        sessionStorage.setItem(cashierStkKey, JSON.stringify(stkSession));
+      } else {
+        sessionStorage.removeItem(cashierStkKey);
+      }
+    } catch {
+      // ignore storage errors
+    }
+  }, [stkSession, cashierStkKey]);
 
   const hoursCheck = isCafeteriaOpenForOrders(cafeteriaSettings);
 
@@ -109,6 +136,30 @@ export function CashierView({
       }
     }
   }, [orders, pendingReceiptOrderId]);
+
+  useEffect(() => {
+    if (mpesaSettings.env === 'mock') return;
+    const pendingOrders = orders.filter(
+      (o) => o.status === 'pending_payment' && Boolean(o.mpesaCheckoutRequestId)
+    );
+    if (pendingOrders.length === 0) return;
+
+    const verifyPending = () => {
+      if (document.visibilityState === 'hidden') return;
+      for (const po of pendingOrders) {
+        if (po.mpesaCheckoutRequestId) {
+          void queryStkStatusFallback(po.mpesaCheckoutRequestId).catch(() => undefined);
+        }
+      }
+    };
+
+    window.addEventListener('focus', verifyPending);
+    document.addEventListener('visibilitychange', verifyPending);
+    return () => {
+      window.removeEventListener('focus', verifyPending);
+      document.removeEventListener('visibilitychange', verifyPending);
+    };
+  }, [orders, mpesaSettings.env]);
 
   const filteredMenu = useMemo(() => {
     return menuItems
@@ -553,6 +604,17 @@ export function CashierView({
 
   const renderQueueAndPayouts = () => (
     <div className="p-4 sm:p-5 space-y-5 max-h-[75vh] overflow-y-auto">
+      {queueActionError && (
+        <div className="bg-[#FCECE9] border border-[#B93829] px-3 py-2 text-xs text-[#B93829] flex items-center justify-between gap-2">
+          <span>{queueActionError}</span>
+          <button
+            onClick={() => setQueueActionError('')}
+            className="font-semibold underline shrink-0"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
       {/* 1. Ready for Counter Pickup */}
       <div>
         <h3 className="font-display text-lg font-bold mb-2">
@@ -586,9 +648,14 @@ export function CashierView({
                   <button
                     disabled={actionBusyId === o.id}
                     onClick={async () => {
+                      setQueueActionError('');
                       setActionBusyId(o.id);
                       try {
                         await advanceOrderStatus(o, 'served');
+                      } catch (err) {
+                        setQueueActionError(
+                          err instanceof Error ? err.message : 'Could not mark order as served.'
+                        );
                       } finally {
                         setActionBusyId(null);
                       }
@@ -631,7 +698,16 @@ export function CashierView({
                   </p>
                 </div>
                 <button
-                  onClick={() => void markCashBackPaid(o, cashier)}
+                  onClick={async () => {
+                    setQueueActionError('');
+                    try {
+                      await markCashBackPaid(o, cashier);
+                    } catch (err) {
+                      setQueueActionError(
+                        err instanceof Error ? err.message : 'Could not mark cash back paid.'
+                      );
+                    }
+                  }}
                   className="min-h-[40px] px-3 py-1.5 bg-[#1C1714] text-[#FAF6EE] text-xs font-semibold flex items-center gap-1.5 shrink-0"
                 >
                   <Check className="w-4 h-4" />
@@ -717,9 +793,14 @@ export function CashierView({
                     <button
                       disabled={actionBusyId === o.id}
                       onClick={async () => {
+                        setQueueActionError('');
                         setActionBusyId(o.id);
                         try {
                           await cancelOrderBeforePreparing(o, cashier);
+                        } catch (err) {
+                          setQueueActionError(
+                            err instanceof Error ? err.message : 'Could not cancel order.'
+                          );
                         } finally {
                           setActionBusyId(null);
                         }
@@ -739,7 +820,7 @@ export function CashierView({
   );
 
   return (
-    <div className="max-w-[1600px] mx-auto px-3 sm:px-4 lg:px-6 py-4 space-y-4 overflow-x-hidden pb-20 lg:pb-6">
+    <div className="max-w-[1600px] mx-auto px-3 sm:px-4 lg:px-6 py-4 space-y-4 overflow-x-clip pb-20 lg:pb-6">
       {/* Counter POS Top Strip */}
       <div className="bg-white border border-[#D9CEBC] px-4 py-3 flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
